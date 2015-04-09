@@ -47,7 +47,7 @@
                 username = <<"">> :: binary(),
                 authzid = <<"">> :: binary(),
                 get_password = fun(_) -> {false, <<>>} end :: get_password_fun(),
-                check_password = fun(_, _, _, _) -> false end :: check_password_fun(),
+                check_password = fun(_, _, _, _, _) -> false end :: check_password_fun(),
                 auth_module :: atom(),
                 host = <<"">> :: binary(),
                 hostfqdn = <<"">> :: binary()}).
@@ -98,7 +98,7 @@ mech_step(#state{step = 3, nonce = Nonce} = State,
 		case (State#state.get_password)(UserName) of
 		  {false, _} -> {error, <<"not-authorized">>, UserName};
 		  {Passwd, AuthModule} ->
-		      case (State#state.check_password)(UserName, <<"">>,
+		      case (State#state.check_password)(UserName, AuthzId, <<"">>,
 		                    proplists:get_value(<<"response">>, KeyVals, <<>>),
 							%xml:get_attr_s(<<"response">>, KeyVals),
 							fun (PW) ->
