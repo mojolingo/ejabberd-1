@@ -5,7 +5,7 @@
 %%% Created : 30 Jul 2004 by Leif Johansson <leifj@it.su.se>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -25,11 +25,13 @@
 
 -module(extauth).
 
+-behaviour(ejabberd_config).
+
 -author('leifj@it.su.se').
 
 -export([start/2, stop/1, init/2, check_password/3,
 	 set_password/3, try_register/3, remove_user/2,
-	 remove_user/3, is_user_exists/2]).
+	 remove_user/3, is_user_exists/2, opt_type/1]).
 
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -93,15 +95,14 @@ remove_user(User, Server, Password) ->
 	      [<<"removeuser3">>, User, Server, Password]).
 
 call_port(Server, Msg) ->
-    LServer = jlib:nameprep(Server),
+    LServer = jid:nameprep(Server),
     ProcessName = get_process_name(LServer,
 				   random_instance(get_instances(LServer))),
     ProcessName ! {call, self(), Msg},
     receive {eauth, Result} -> Result end.
 
 random_instance(MaxNum) ->
-    {A1, A2, A3} = now(),
-    random:seed(A1, A2, A3),
+    random:seed(p1_time_compat:timestamp()),
     random:uniform(MaxNum) - 1.
 
 get_instances(Server) ->
@@ -157,3 +158,7 @@ encode(L) -> str:join(L, <<":">>).
 
 decode([0, 0]) -> false;
 decode([0, 1]) -> true.
+
+opt_type(extauth_instances) ->
+    fun (V) when is_integer(V), V > 0 -> V end;
+opt_type(_) -> [extauth_instances].

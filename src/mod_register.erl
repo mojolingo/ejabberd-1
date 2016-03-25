@@ -5,7 +5,7 @@
 %%% Created :  8 Dec 2002 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -25,14 +25,19 @@
 
 -module(mod_register).
 
+-behaviour(ejabberd_config).
+
 -author('alexey@process-one.net').
+
+-protocol({xep, 77, '2.4'}).
 
 -behaviour(gen_mod).
 
 -export([start/2, stop/1, stream_feature_register/2,
 	 unauthenticated_iq_register/4, try_register/5,
 	 process_iq/3, send_registration_notifications/3,
-         transform_options/1, transform_module_options/1]).
+	 transform_options/1, transform_module_options/1,
+	 mod_opt_type/1, opt_type/1]).
 
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -67,11 +72,19 @@ stop(Host) ->
     gen_iq_handler:remove_iq_handler(ejabberd_sm, Host,
 				     ?NS_REGISTER).
 
-stream_feature_register(Acc, _Host) ->
-    [#xmlel{name = <<"register">>,
-	    attrs = [{<<"xmlns">>, ?NS_FEATURE_IQREGISTER}],
-	    children = []}
-     | Acc].
+stream_feature_register(Acc, Host) ->
+    AF = gen_mod:get_module_opt(Host, ?MODULE, access_from,
+                                          fun(A) when is_atom(A) -> A end,
+					  all),
+    case (AF /= none) and lists:keymember(<<"mechanisms">>, 2, Acc) of
+	true ->
+	    [#xmlel{name = <<"register">>,
+		    attrs = [{<<"xmlns">>, ?NS_FEATURE_IQREGISTER}],
+		    children = []}
+	     | Acc];
+	false ->
+	    Acc
+    end.
 
 unauthenticated_iq_register(_Acc, Server,
 			    #iq{xmlns = ?NS_REGISTER} = IQ, IP) ->
@@ -79,19 +92,19 @@ unauthenticated_iq_register(_Acc, Server,
 		{A, _Port} -> A;
 		_ -> undefined
 	      end,
-    ResIQ = process_iq(jlib:make_jid(<<"">>, <<"">>,
+    ResIQ = process_iq(jid:make(<<"">>, <<"">>,
 				     <<"">>),
-		       jlib:make_jid(<<"">>, Server, <<"">>), IQ, Address),
-    Res1 = jlib:replace_from_to(jlib:make_jid(<<"">>,
+		       jid:make(<<"">>, Server, <<"">>), IQ, Address),
+    Res1 = jlib:replace_from_to(jid:make(<<"">>,
 					      Server, <<"">>),
-				jlib:make_jid(<<"">>, <<"">>, <<"">>),
+				jid:make(<<"">>, <<"">>, <<"">>),
 				jlib:iq_to_xml(ResIQ)),
     jlib:remove_attr(<<"to">>, Res1);
 unauthenticated_iq_register(Acc, _Server, _IQ, _IP) ->
     Acc.
 
 process_iq(From, To, IQ) ->
-    process_iq(From, To, IQ, jlib:jid_tolower(From)).
+    process_iq(From, To, IQ, jid:tolower(From)).
 
 process_iq(From, To,
 	   #iq{type = Type, lang = Lang, sub_el = SubEl, id = ID} =
@@ -108,9 +121,9 @@ process_iq(From, To,
 		       end,
     case Type of
       set ->
-	  UTag = xml:get_subtag(SubEl, <<"username">>),
-	  PTag = xml:get_subtag(SubEl, <<"password">>),
-	  RTag = xml:get_subtag(SubEl, <<"remove">>),
+	  UTag = fxml:get_subtag(SubEl, <<"username">>),
+	  PTag = fxml:get_subtag(SubEl, <<"password">>),
+	  RTag = fxml:get_subtag(SubEl, <<"remove">>),
 	  Server = To#jid.lserver,
 	  Access = gen_mod:get_module_opt(Server, ?MODULE, access,
                                           fun(A) when is_atom(A) -> A end,
@@ -119,14 +132,14 @@ process_iq(From, To,
 			  acl:match_rule(Server, Access, From),
 	  if (UTag /= false) and (RTag /= false) and
 	       AllowRemove ->
-		 User = xml:get_tag_cdata(UTag),
+		 User = fxml:get_tag_cdata(UTag),
 		 case From of
 		   #jid{user = User, lserver = Server} ->
 		       ejabberd_auth:remove_user(User, Server),
 		       IQ#iq{type = result, sub_el = []};
 		   _ ->
 		       if PTag /= false ->
-			      Password = xml:get_tag_cdata(PTag),
+			      Password = fxml:get_tag_cdata(PTag),
 			      case ejabberd_auth:remove_user(User, Server,
 							     Password)
 				  of
@@ -161,9 +174,9 @@ process_iq(From, To,
 			resource = Resource} ->
 		       ResIQ = #iq{type = result, xmlns = ?NS_REGISTER,
 				   id = ID, sub_el = []},
-		       ejabberd_router:route(jlib:make_jid(User, Server,
+		       ejabberd_router:route(jid:make(User, Server,
 							   Resource),
-					     jlib:make_jid(User, Server,
+					     jid:make(User, Server,
 							   Resource),
 					     jlib:iq_to_xml(ResIQ)),
 		       ejabberd_auth:remove_user(User, Server),
@@ -172,8 +185,8 @@ process_iq(From, To,
 		       IQ#iq{type = error, sub_el = [SubEl, ?ERR_NOT_ALLOWED]}
 		 end;
 	     (UTag /= false) and (PTag /= false) ->
-		 User = xml:get_tag_cdata(UTag),
-		 Password = xml:get_tag_cdata(PTag),
+		 User = fxml:get_tag_cdata(UTag),
+		 Password = fxml:get_tag_cdata(PTag),
 		 try_register_or_set_password(User, Server, Password,
 					      From, IQ, SubEl, Source, Lang,
 					      not IsCaptchaEnabled);
@@ -275,7 +288,7 @@ process_iq(From, To,
 				 [#xmlel{name = <<"query">>,
 					 attrs =
 					     [{<<"xmlns">>,
-					       <<"jabber:iq:register">>}],
+					       ?NS_REGISTER}],
 					 children =
 					     [TopInstrEl | CaptchaEls]}]};
 		   {error, limit} ->
@@ -297,7 +310,7 @@ process_iq(From, To,
 			   [#xmlel{name = <<"query">>,
 				   attrs =
 				       [{<<"xmlns">>,
-					 <<"jabber:iq:register">>}],
+					 ?NS_REGISTER}],
 				   children =
 				       [#xmlel{name = <<"instructions">>,
 					       attrs = [],
@@ -363,10 +376,10 @@ try_set_password(User, Server, Password, IQ, SubEl,
     end.
 
 try_register(User, Server, Password, SourceRaw, Lang) ->
-    case jlib:is_nodename(User) of
+    case jid:is_nodename(User) of
       false -> {error, ?ERR_BAD_REQUEST};
       _ ->
-	  JID = jlib:make_jid(User, Server, <<"">>),
+	  JID = jid:make(User, Server, <<"">>),
 	  Access = gen_mod:get_module_opt(Server, ?MODULE, access,
                                           fun(A) when is_atom(A) -> A end,
 					  all),
@@ -397,6 +410,8 @@ try_register(User, Server, Password, SourceRaw, Lang) ->
 				    {error, invalid_jid} ->
 					{error, ?ERR_JID_MALFORMED};
 				    {error, not_allowed} ->
+					{error, ?ERR_NOT_ALLOWED};
+				    {error, too_many_users} ->
 					{error, ?ERR_NOT_ALLOWED};
 				    {error, _Reason} ->
 					{error, ?ERR_INTERNAL_SERVER_ERROR}
@@ -429,7 +444,7 @@ send_welcome_message(JID) ->
 	of
       {<<"">>, <<"">>} -> ok;
       {Subj, Body} ->
-	  ejabberd_router:route(jlib:make_jid(<<"">>, Host,
+	  ejabberd_router:route(jid:make(<<"">>, Host,
 					      <<"">>),
 				JID,
 				#xmlel{name = <<"message">>,
@@ -451,7 +466,7 @@ send_registration_notifications(Mod, UJID, Source) ->
     case gen_mod:get_module_opt(
            Host, Mod, registration_watchers,
            fun(Ss) ->
-                   [#jid{} = jlib:string_to_jid(iolist_to_binary(S))
+                   [#jid{} = jid:from_string(iolist_to_binary(S))
                     || S <- Ss]
            end, []) of
         [] -> ok;
@@ -460,13 +475,13 @@ send_registration_notifications(Mod, UJID, Source) ->
                 iolist_to_binary(io_lib:format("[~s] The account ~s was registered from "
                                                "IP address ~s on node ~w using ~p.",
                                                [get_time_string(),
-                                                jlib:jid_to_string(UJID),
+                                                jid:to_string(UJID),
                                                 ip_to_string(Source), node(),
                                                 Mod])),
             lists:foreach(
               fun(JID) ->
                       ejabberd_router:route(
-                        jlib:make_jid(<<"">>, Host, <<"">>),
+                        jid:make(<<"">>, Host, <<"">>),
                         JID,
                         #xmlel{name = <<"message">>,
                                attrs = [{<<"type">>, <<"chat">>}],
@@ -497,8 +512,7 @@ check_timeout(Source) ->
                         infinity
                 end, 600),
     if is_integer(Timeout) ->
-	   {MSec, Sec, _USec} = now(),
-	   Priority = -(MSec * 1000000 + Sec),
+	   Priority = -p1_time_compat:system_time(seconds),
 	   CleanPriority = Priority + Timeout,
 	   F = fun () ->
 		       Treap = case mnesia:read(mod_register_ip, treap, write)
@@ -585,7 +599,7 @@ write_time({{Y, Mo, D}, {H, Mi, S}}) ->
 		  [Y, Mo, D, H, Mi, S]).
 
 process_xdata_submit(El) ->
-    case xml:get_subtag(El, <<"x">>) of
+    case fxml:get_subtag(El, <<"x">>) of
       false -> error;
       Xdata ->
 	  Fields = jlib:parse_xdata_submit(Xdata),
@@ -598,7 +612,7 @@ process_xdata_submit(El) ->
     end.
 
 is_strong_password(Server, Password) ->
-    LServer = jlib:nameprep(Server),
+    LServer = jid:nameprep(Server),
     case gen_mod:get_module_opt(LServer, ?MODULE, password_strength,
                                 fun(N) when is_number(N), N>=0 -> N end,
                                 0) of
@@ -661,7 +675,7 @@ transform_module_options(Opts) ->
 %%%
 
 may_remove_resource({_, _, _} = From) ->
-    jlib:jid_remove_resource(From);
+    jid:remove_resource(From);
 may_remove_resource(From) -> From.
 
 get_ip_access(Host) ->
@@ -680,3 +694,37 @@ check_ip_access(undefined, _IPAccess) ->
     deny;
 check_ip_access(IPAddress, IPAccess) ->
     acl:match_rule(global, IPAccess, IPAddress).
+
+mod_opt_type(access) ->
+    fun (A) when is_atom(A) -> A end;
+mod_opt_type(access_from) ->
+    fun (A) when is_atom(A) -> A end;
+mod_opt_type(captcha_protected) ->
+    fun (B) when is_boolean(B) -> B end;
+mod_opt_type(ip_access) ->
+    fun (A) when is_atom(A) -> A end;
+mod_opt_type(iqdisc) -> fun gen_iq_handler:check_type/1;
+mod_opt_type(password_strength) ->
+    fun (N) when is_number(N), N >= 0 -> N end;
+mod_opt_type(registration_watchers) ->
+    fun (Ss) ->
+	    [#jid{} = jid:from_string(iolist_to_binary(S))
+	     || S <- Ss]
+    end;
+mod_opt_type(welcome_message) ->
+    fun (Opts) ->
+	    S = proplists:get_value(subject, Opts, <<>>),
+	    B = proplists:get_value(body, Opts, <<>>),
+	    {iolist_to_binary(S), iolist_to_binary(B)}
+    end;
+mod_opt_type(_) ->
+    [access, access_from, captcha_protected, ip_access,
+     iqdisc, password_strength, registration_watchers,
+     welcome_message].
+
+opt_type(registration_timeout) ->
+    fun (TO) when is_integer(TO), TO > 0 -> TO;
+	(infinity) -> infinity;
+	(unlimited) -> infinity
+    end;
+opt_type(_) -> [registration_timeout].

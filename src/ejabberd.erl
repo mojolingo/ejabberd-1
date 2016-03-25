@@ -5,7 +5,7 @@
 %%% Created : 16 Nov 2002 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -25,6 +25,16 @@
 
 -module(ejabberd).
 -author('alexey@process-one.net').
+
+-protocol({xep, 4, '2.9'}).
+-protocol({xep, 86, '1.0'}).
+-protocol({xep, 106, '1.1'}).
+-protocol({xep, 170, '1.0'}).
+-protocol({xep, 205, '1.0'}).
+-protocol({xep, 212, '1.0'}).
+-protocol({xep, 216, '1.0'}).
+-protocol({xep, 243, '1.0'}).
+-protocol({xep, 270, '1.0'}).
 
 -export([start/0, stop/0, start_app/1, start_app/2,
 	 get_pid_file/0, check_app/1]).
@@ -95,7 +105,7 @@ start_app([], _Type, _StartFlag) ->
     ok.
 
 check_app_modules(App, StartFlag) ->
-    {A, B, C} = now(),
+    {A, B, C} = p1_time_compat:timestamp(),
     random:seed(A, B, C),
     sleep(5000),
     case application:get_key(App, modules) of

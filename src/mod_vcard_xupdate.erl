@@ -12,8 +12,8 @@
 %% gen_mod callbacks
 -export([start/2, stop/1]).
 
-%% hooks
--export([update_presence/3, vcard_set/3, export/1, import/1, import/3]).
+-export([update_presence/3, vcard_set/3, export/1,
+	 import/1, import/3, mod_opt_type/1]).
 
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -56,7 +56,7 @@ stop(Host) ->
 
 update_presence(#xmlel{name = <<"presence">>, attrs = Attrs} = Packet,
   User, Host) ->
-    case xml:get_attr_s(<<"type">>, Attrs) of
+    case fxml:get_attr_s(<<"type">>, Attrs) of
       <<>> -> presence_with_xupdate(Packet, User, Host);
       _ -> Packet
     end;
@@ -64,7 +64,7 @@ update_presence(Packet, _User, _Host) -> Packet.
 
 vcard_set(LUser, LServer, VCARD) ->
     US = {LUser, LServer},
-    case xml:get_path_s(VCARD,
+    case fxml:get_path_s(VCARD,
 			[{elem, <<"PHOTO">>}, {elem, <<"BINVAL">>}, cdata])
 	of
       <<>> -> remove_xupdate(LUser, LServer);
@@ -231,3 +231,6 @@ import(_LServer, riak, #vcard_xupdate{} = R) ->
     ejabberd_riak:put(R, vcard_xupdate_schema());
 import(_, _, _) ->
     pass.
+
+mod_opt_type(db_type) -> fun gen_mod:v_db/1;
+mod_opt_type(_) -> [db_type].

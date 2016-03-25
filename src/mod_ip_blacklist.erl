@@ -7,7 +7,7 @@
 %%%              {mod_ip_blacklist, []}
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -36,8 +36,7 @@
 
 -export([update_bl_c2s/0]).
 
-%% Hooks:
--export([is_ip_in_c2s_blacklist/3]).
+-export([is_ip_in_c2s_blacklist/3, mod_opt_type/1]).
 
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -129,3 +128,5 @@ is_ip_in_c2s_blacklist(_Val, _IP, _Lang) -> false.
 %% - For now, we do not kick user already logged on a given IP after
 %%    we update the blacklist.
 
+
+mod_opt_type(_) -> [].

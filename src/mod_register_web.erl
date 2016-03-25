@@ -5,7 +5,7 @@
 %%% Created :  4 May 2008 by Badlop <badlop@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -55,7 +55,7 @@
 
 -behaviour(gen_mod).
 
--export([start/2, stop/1, process/2]).
+-export([start/2, stop/1, process/2, mod_opt_type/1]).
 
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -97,10 +97,10 @@ process([<<"change_password">>],
     form_changepass_get(Host, Lang);
 process([<<"new">>],
 	#request{method = 'POST', q = Q, ip = {Ip, _Port},
-		 lang = Lang, host = Host}) ->
-    case form_new_post(Q, Host) of
+		 lang = Lang, host = _HTTPHost}) ->
+    case form_new_post(Q) of
       {success, ok, {Username, Host, _Password}} ->
-	  Jid = jlib:make_jid(Username, Host, <<"">>),
+	  Jid = jid:make(Username, Host, <<"">>),
           mod_register:send_registration_notifications(?MODULE, Jid, Ip),
 	  Text = (?T(<<"Your Jabber account was successfully "
 		       "created.">>)),
@@ -113,8 +113,8 @@ process([<<"new">>],
     end;
 process([<<"delete">>],
 	#request{method = 'POST', q = Q, lang = Lang,
-		 host = Host}) ->
-    case form_del_post(Q, Host) of
+		 host = _HTTPHost}) ->
+    case form_del_post(Q) of
       {atomic, ok} ->
 	  Text = (?T(<<"Your Jabber account was successfully "
 		       "deleted.">>)),
@@ -129,8 +129,8 @@ process([<<"delete">>],
 %% should include the host where the POST was sent.
 process([<<"change_password">>],
 	#request{method = 'POST', q = Q, lang = Lang,
-		 host = Host}) ->
-    case form_changepass_post(Q, Host) of
+		 host = _HTTPHost}) ->
+    case form_changepass_post(Q) of
       {atomic, ok} ->
 	  Text = (?T(<<"The password of your Jabber account "
 		       "was successfully changed.">>)),
@@ -233,7 +233,8 @@ form_new_get(Host, Lang, IP) ->
 				     <<(?T(<<"Characters not allowed:">>))/binary,
 				       " \" & ' / : < > @ ">>)])]),
 		       ?XE(<<"li">>,
-			   [?CT(<<"Server:">>), ?C(<<" ">>), ?C(Host)]),
+			   [?CT(<<"Server:">>), ?C(<<" ">>),
+			    ?INPUTS(<<"text">>, <<"host">>, Host, <<"20">>)]),
 		       ?XE(<<"li">>,
 			   [?CT(<<"Password:">>), ?C(<<" ">>),
 			    ?INPUTS(<<"password">>, <<"password">>, <<"">>,
@@ -249,8 +250,8 @@ form_new_get(Host, Lang, IP) ->
 					"a Jabber client.">>),
 				 ?XCT(<<"li">>,
 				      <<"Some Jabber clients can store your password "
-					"in your computer. Use that feature only "
-					"if you trust your computer is safe.">>),
+					"in the computer, but you should do this only "
+					"in your personal computer for safety reasons.">>),
 				 ?XCT(<<"li">>,
 				      <<"Memorize your password, or write it "
 					"in a paper placed in a safe place. In "
@@ -277,13 +278,13 @@ form_new_get(Host, Lang, IP) ->
 %%% Formulary new POST
 %%%----------------------------------------------------------------------
 
-form_new_post(Q, Host) ->
+form_new_post(Q) ->
     case catch get_register_parameters(Q) of
-      [Username, Password, Password, Id, Key] ->
+      [Username, Host, Password, Password, Id, Key] ->
 	  form_new_post(Username, Host, Password, {Id, Key});
-      [_Username, _Password, _Password2, false, false] ->
+      [_Username, _Host, _Password, _Password2, false, false] ->
 	  {error, passwords_not_identical};
-      [_Username, _Password, _Password2, Id, Key] ->
+      [_Username, _Host, _Password, _Password2, Id, Key] ->
 	  ejabberd_captcha:check_captcha(Id, Key),
 	  {error, passwords_not_identical};
       _ -> {error, wrong_parameters}
@@ -296,7 +297,7 @@ get_register_parameters(Q) ->
 			false -> false
 		      end
 	      end,
-	      [<<"username">>, <<"password">>, <<"password2">>,
+	      [<<"username">>, <<"host">>, <<"password">>, <<"password2">>,
 	       <<"id">>, <<"key">>]).
 
 form_new_post(Username, Host, Password,
@@ -360,7 +361,8 @@ form_changepass_get(Host, Lang) ->
 			   ?INPUTS(<<"text">>, <<"username">>, <<"">>,
 				   <<"20">>)]),
 		      ?XE(<<"li">>,
-			  [?CT(<<"Server:">>), ?C(<<" ">>), ?C(Host)]),
+			  [?CT(<<"Server:">>), ?C(<<" ">>),
+			   ?INPUTS(<<"text">>, <<"host">>, Host, <<"20">>)]),
 		      ?XE(<<"li">>,
 			  [?CT(<<"Old Password:">>), ?C(<<" ">>),
 			   ?INPUTS(<<"password">>, <<"passwordold">>, <<"">>,
@@ -385,12 +387,12 @@ form_changepass_get(Host, Lang) ->
 %%% Formulary change password POST
 %%%----------------------------------------------------------------------
 
-form_changepass_post(Q, Host) ->
+form_changepass_post(Q) ->
     case catch get_changepass_parameters(Q) of
-      [Username, PasswordOld, Password, Password] ->
+      [Username, Host, PasswordOld, Password, Password] ->
 	  try_change_password(Username, Host, PasswordOld,
 			      Password);
-      [_Username, _PasswordOld, _Password, _Password2] ->
+      [_Username, _Host, _PasswordOld, _Password, _Password2] ->
 	  {error, passwords_not_identical};
       _ -> {error, wrong_parameters}
     end.
@@ -404,7 +406,7 @@ get_changepass_parameters(Q) ->
 		      {value, {_Key, Value}} = lists:keysearch(Key, 1, Q),
 		      Value
 	      end,
-	      [<<"username">>, <<"passwordold">>, <<"password">>,
+	      [<<"username">>, <<"host">>, <<"passwordold">>, <<"password">>,
 	       <<"password2">>]).
 
 try_change_password(Username, Host, PasswordOld,
@@ -436,7 +438,7 @@ check_account_exists(Username, Host) ->
     end.
 
 check_password(Username, Host, Password) ->
-    case ejabberd_auth:check_password(Username, Host,
+    case ejabberd_auth:check_password(Username, <<"">>, Host,
 				      Password)
 	of
       true -> password_correct;
@@ -469,7 +471,8 @@ form_del_get(Host, Lang) ->
 			   ?INPUTS(<<"text">>, <<"username">>, <<"">>,
 				   <<"20">>)]),
 		      ?XE(<<"li">>,
-			  [?CT(<<"Server:">>), ?C(<<" ">>), ?C(Host)]),
+			  [?CT(<<"Server:">>), ?C(<<" ">>),
+			   ?INPUTS(<<"text">>, <<"host">>, Host, <<"20">>)]),
 		      ?XE(<<"li">>,
 			  [?CT(<<"Password:">>), ?C(<<" ">>),
 			   ?INPUTS(<<"password">>, <<"password">>, <<"">>,
@@ -490,7 +493,7 @@ register_account(Username, Host, Password) ->
     Access = gen_mod:get_module_opt(Host, mod_register, access,
                                     fun(A) when is_atom(A) -> A end,
                                     all),
-    case jlib:make_jid(Username, Host, <<"">>) of
+    case jid:make(Username, Host, <<"">>) of
       error -> {error, invalid_jid};
       JID ->
         case acl:match_rule(Host, Access, JID) of
@@ -512,9 +515,9 @@ register_account2(Username, Host, Password) ->
 %%% Formulary delete POST
 %%%----------------------------------------------------------------------
 
-form_del_post(Q, Host) ->
+form_del_post(Q) ->
     case catch get_unregister_parameters(Q) of
-      [Username, Password] ->
+      [Username, Host, Password] ->
 	  try_unregister_account(Username, Host, Password);
       _ -> {error, wrong_parameters}
     end.
@@ -528,7 +531,7 @@ get_unregister_parameters(Q) ->
 		      {value, {_Key, Value}} = lists:keysearch(Key, 1, Q),
 		      Value
 	      end,
-	      [<<"username">>, <<"password">>]).
+	      [<<"username">>, <<"host">>, <<"password">>]).
 
 try_unregister_account(Username, Host, Password) ->
     try unregister_account(Username, Host, Password) of
@@ -573,3 +576,5 @@ get_error_text({error, passwords_not_identical}) ->
     <<"The passwords are different">>;
 get_error_text({error, wrong_parameters}) ->
     <<"Wrong parameters in the web formulary">>.
+
+mod_opt_type(_) -> [].

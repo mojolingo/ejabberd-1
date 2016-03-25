@@ -1,11 +1,11 @@
 %%%----------------------------------------------------------------------
 %%% File    : mod_client_state.erl
-%%% Author  : Holger Weiss
+%%% Author  : Holger Weiss <holger@zedat.fu-berlin.de>
 %%% Purpose : Filter stanzas sent to inactive clients (XEP-0352)
-%%% Created : 11 Sep 2014 by Holger Weiss
+%%% Created : 11 Sep 2014 by Holger Weiss <holger@zedat.fu-berlin.de>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2014-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2014-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -25,11 +25,14 @@
 
 -module(mod_client_state).
 -author('holger@zedat.fu-berlin.de').
+-protocol({xep, 85, '2.1'}).
+-protocol({xep, 352, '0.1'}).
 
 -behavior(gen_mod).
 
--export([start/2, stop/1, add_stream_feature/2, filter_presence/2,
-	 filter_chat_states/2]).
+-export([start/2, stop/1, add_stream_feature/2,
+	 filter_presence/2, filter_chat_states/2,
+	 mod_opt_type/1]).
 
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -39,11 +42,11 @@ start(Host, Opts) ->
     QueuePresence = gen_mod:get_opt(queue_presence, Opts,
 				    fun(true) -> true;
 				       (false) -> false
-				    end, false),
+				    end, true),
     DropChatStates = gen_mod:get_opt(drop_chat_states, Opts,
 				     fun(true) -> true;
 				        (false) -> false
-				     end, false),
+				     end, true),
     if QueuePresence; DropChatStates ->
 	   ejabberd_hooks:add(c2s_post_auth_features, Host, ?MODULE,
 			      add_stream_feature, 50),
@@ -77,7 +80,7 @@ add_stream_feature(Features, _Host) ->
     [Feature | Features].
 
 filter_presence(_Action, #xmlel{name = <<"presence">>, attrs = Attrs}) ->
-    case xml:get_attr(<<"type">>, Attrs) of
+    case fxml:get_attr(<<"type">>, Attrs) of
       {value, Type} when Type /= <<"unavailable">> ->
 	  ?DEBUG("Got important presence stanza", []),
 	  {stop, send};
@@ -88,22 +91,22 @@ filter_presence(_Action, #xmlel{name = <<"presence">>, attrs = Attrs}) ->
 filter_presence(Action, _Stanza) -> Action.
 
 filter_chat_states(_Action, #xmlel{name = <<"message">>} = Stanza) ->
-    %% All XEP-0085 chat states except for <gone/>:
-    ChatStates = [<<"active">>, <<"inactive">>, <<"composing">>, <<"paused">>],
-    Stripped =
-	lists:foldl(fun(ChatState, AccStanza) ->
-			    xml:remove_subtags(AccStanza, ChatState,
-					       {<<"xmlns">>, ?NS_CHATSTATES})
-		    end, Stanza, ChatStates),
-    case Stripped of
-      #xmlel{children = [#xmlel{name = <<"thread">>}]} ->
+    case jlib:is_standalone_chat_state(Stanza) of
+      true ->
 	  ?DEBUG("Got standalone chat state notification", []),
 	  {stop, drop};
-      #xmlel{children = []} ->
-	  ?DEBUG("Got standalone chat state notification", []),
-	  {stop, drop};
-      _ ->
-	  ?DEBUG("Got message with chat state notification", []),
+      false ->
+	  ?DEBUG("Got message stanza", []),
 	  {stop, send}
     end;
 filter_chat_states(Action, _Stanza) -> Action.
+
+mod_opt_type(drop_chat_states) ->
+    fun (true) -> true;
+	(false) -> false
+    end;
+mod_opt_type(queue_presence) ->
+    fun (true) -> true;
+	(false) -> false
+    end;
+mod_opt_type(_) -> [drop_chat_states, queue_presence].

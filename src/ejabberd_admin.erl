@@ -5,7 +5,7 @@
 %%% Created :  7 May 2006 by Mickael Remond <mremond@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -28,10 +28,13 @@
 
 -export([start/0, stop/0,
 	 %% Server
-	 status/0, reopen_log/0,
+	 status/0, reopen_log/0, rotate_log/0,
+	 set_loglevel/1,
 	 stop_kindly/2, send_service_message_all_mucs/2,
 	 registered_vhosts/0,
 	 reload_config/0,
+	 %% Cluster
+	 join_cluster/1, leave_cluster/1, list_cluster/0,
 	 %% Erlang
 	 update_list/0, update/1,
 	 %% Accounts
@@ -42,14 +45,14 @@
 	 %% Purge DB
 	 delete_expired_messages/0, delete_old_messages/1,
 	 %% Mnesia
-	 export2odbc/2,
 	 set_master/1,
 	 backup_mnesia/1, restore_mnesia/1,
 	 dump_mnesia/1, dump_table/2, load_mnesia/1,
 	 install_fallback_mnesia/1,
 	 dump_to_textfile/1, dump_to_textfile/2,
 	 mnesia_change_nodename/4,
-	 restore/1 % Still used by some modules
+	 restore/1, % Still used by some modules
+	 get_commands_spec/0
 	]).
 
 -include("ejabberd.hrl").
@@ -57,16 +60,16 @@
 -include("ejabberd_commands.hrl").
 
 start() ->
-    ejabberd_commands:register_commands(commands()).
+    ejabberd_commands:register_commands(get_commands_spec()).
 
 stop() ->
-    ejabberd_commands:unregister_commands(commands()).
+    ejabberd_commands:unregister_commands(get_commands_spec()).
 
 %%%
 %%% ejabberd commands
 %%%
 
-commands() ->
+get_commands_spec() ->
     [
      %% The commands status, stop and restart are implemented also in ejabberd_ctl
      %% They are defined here so that other interfaces can use them too
@@ -86,6 +89,10 @@ commands() ->
 			desc = "Reopen the log files",
 			module = ?MODULE, function = reopen_log,
 			args = [], result = {res, rescode}},
+     #ejabberd_commands{name = rotate_log, tags = [logs, server],
+			desc = "Rotate the log files",
+			module = ?MODULE, function = rotate_log,
+			args = [], result = {res, rescode}},
      #ejabberd_commands{name = stop_kindly, tags = [server],
 			desc = "Inform users and rooms, wait, and stop the server",
 			longdesc = "Provide the delay in seconds, and the "
@@ -103,6 +110,11 @@ commands() ->
                                                        {levelatom, atom},
                                                        {leveldesc, string}
                                                       ]}}},
+     #ejabberd_commands{name = set_loglevel, tags = [logs, server],
+			desc = "Set the loglevel (0 to 5)",
+			module = ?MODULE, function = set_loglevel,
+			args = [{loglevel, integer}],
+			result = {logger, atom}},
 
      #ejabberd_commands{name = update_list, tags = [server],
 			desc = "List modified modules that can be updated",
@@ -136,10 +148,26 @@ commands() ->
 			args = [],
 			result = {vhosts, {list, {vhost, string}}}},
      #ejabberd_commands{name = reload_config, tags = [server],
-			desc = "Reload ejabberd configuration file into memory",
+			desc = "Reload config file in memory (only affects ACL and Access)",
 			module = ?MODULE, function = reload_config,
 			args = [],
 			result = {res, rescode}},
+
+     #ejabberd_commands{name = join_cluster, tags = [cluster],
+			desc = "Join this node into the cluster handled by Node",
+			module = ?MODULE, function = join_cluster,
+			args = [{node, binary}],
+			result = {res, rescode}},
+     #ejabberd_commands{name = leave_cluster, tags = [cluster],
+			desc = "Remove node handled by Node from the cluster",
+			module = ?MODULE, function = leave_cluster,
+			args = [{node, binary}],
+			result = {res, rescode}},
+     #ejabberd_commands{name = list_cluster, tags = [cluster],
+			desc = "List nodes that are part of the cluster handled by Node",
+			module = ?MODULE, function = list_cluster,
+			args = [], 
+			result = {nodes, {list, {node, atom}}}},
 
      #ejabberd_commands{name = import_file, tags = [mnesia],
 			desc = "Import user data from jabberd14 spool file",
@@ -168,6 +196,19 @@ commands() ->
                         desc = "Export all tables as SQL queries to a file",
                         module = ejd2odbc, function = export,
                         args = [{host, string}, {file, string}], result = {res, rescode}},
+     #ejabberd_commands{name = delete_mnesia, tags = [mnesia, odbc],
+                        desc = "Export all tables as SQL queries to a file",
+                        module = ejd2odbc, function = delete,
+                        args = [{host, string}], result = {res, rescode}},
+     #ejabberd_commands{name = convert_to_scram, tags = [odbc],
+			desc = "Convert the passwords in 'users' ODBC table to SCRAM",
+			module = ejabberd_auth_odbc, function = convert_to_scram,
+			args = [{host, binary}], result = {res, rescode}},
+
+     #ejabberd_commands{name = import_prosody, tags = [mnesia, odbc, riak],
+			desc = "Import data from Prosody",
+			module = prosody2ejabberd, function = from_dir,
+			args = [{dir, string}], result = {res, rescode}},
 
      #ejabberd_commands{name = convert_to_yaml, tags = [config],
                         desc = "Convert the input file from Erlang to YAML format",
@@ -184,14 +225,9 @@ commands() ->
 			module = ?MODULE, function = delete_old_messages,
 			args = [{days, integer}], result = {res, rescode}},
 	 
-     #ejabberd_commands{name = rename_default_nodeplugin, tags = [mnesia],
-			desc = "Update PubSub table from old ejabberd trunk SVN to 2.1.0",
-			module = mod_pubsub, function = rename_default_nodeplugin,
-			args = [], result = {res, rescode}},
-
      #ejabberd_commands{name = export2odbc, tags = [mnesia],
 			desc = "Export virtual host information from Mnesia tables to SQL files",
-			module = ?MODULE, function = export2odbc,
+			module = ejd2odbc, function = export,
 			args = [{host, string}, {directory, string}],
 			result = {res, rescode}},
      #ejabberd_commands{name = set_master, tags = [mnesia],
@@ -253,6 +289,15 @@ status() ->
 reopen_log() ->
     ejabberd_hooks:run(reopen_log_hook, []),
     ejabberd_logger:reopen_log().
+
+rotate_log() ->
+    ejabberd_hooks:run(rotate_log_hook, []),
+    ejabberd_logger:rotate_log().
+
+set_loglevel(LogLevel) ->
+    {module, Module} = ejabberd_logger:set(LogLevel),
+    Module.
+
 
 %%%
 %%% Stop Kindly
@@ -364,6 +409,19 @@ reload_config() ->
     shaper:start().
 
 %%%
+%%% Cluster management
+%%%
+
+join_cluster(NodeBin) ->
+    ejabberd_cluster:join(list_to_atom(binary_to_list(NodeBin))).
+
+leave_cluster(NodeBin) ->
+    ejabberd_cluster:leave(list_to_atom(binary_to_list(NodeBin))).
+
+list_cluster() ->
+    ejabberd_cluster:get_nodes().
+
+%%%
 %%% Migration management
 %%%
 
@@ -407,23 +465,6 @@ delete_old_messages(Days) ->
 %%%
 %%% Mnesia management
 %%%
-
-export2odbc(Host, Directory) ->
-    Tables = [{export_last, last},
-              {export_offline, offline},
-              {export_private_storage, private_storage},
-              {export_roster, roster},
-              {export_vcard, vcard},
-              {export_vcard_search, vcard_search},
-              {export_passwd, passwd}],
-    Export = fun({TableFun, Table}) ->
-                     Filename = filename:join([Directory, atom_to_list(Table)++".txt"]),
-                     io:format("Trying to export Mnesia table '~p' on Host '~s' to file '~s'~n", [Table, Host, Filename]),
-                     Res = (catch ejd2odbc:TableFun(Host, Filename)),
-                     io:format("  Result: ~p~n", [Res])
-             end,
-    lists:foreach(Export, Tables),
-    ok.
 
 set_master("self") ->
     set_master(node());
@@ -469,7 +510,7 @@ restore_mnesia(Path) ->
 
 %% Mnesia database restore
 %% This function is called from ejabberd_ctl, ejabberd_web_admin and
-%% mod_configure/adhoc 
+%% mod_configure/adhoc
 restore(Path) ->
     mnesia:restore(Path, [{keep_tables,keep_tables()},
 			  {default_op, skip_tables}]).
@@ -484,7 +525,7 @@ keep_tables() ->
 
 %% Returns the list of modules tables in use, according to the list of actually
 %% loaded modules
-keep_modules_tables() ->		      
+keep_modules_tables() ->
     lists:map(fun(Module) -> module_tables(Module) end,
 	      gen_mod:loaded_modules(?MYNAME)).
 

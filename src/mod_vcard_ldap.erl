@@ -5,7 +5,7 @@
 %%% Created :  2 Jan 2003 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -21,9 +21,11 @@
 %%% with this program; if not, write to the Free Software Foundation, Inc.,
 %%% 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 %%%
-%%%----------------------------------------------------------------------
+%%%---------------------u-------------------------------------------------
 
 -module(mod_vcard_ldap).
+
+-behaviour(ejabberd_config).
 
 -author('alexey@process-one.net').
 
@@ -37,7 +39,8 @@
 
 -export([start/2, start_link/2, stop/1,
 	 get_sm_features/5, process_local_iq/3, process_sm_iq/3,
-	 remove_user/1, route/4, transform_module_options/1]).
+	 remove_user/1, route/4, transform_module_options/1,
+	 mod_opt_type/1, opt_type/1]).
 
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -52,7 +55,7 @@
 	{serverhost = <<"">>        :: binary(),
          myhost = <<"">>            :: binary(),
          eldap_id = <<"">>          :: binary(),
-         search = true              :: boolean(),
+         search = false             :: boolean(),
          servers = []               :: [binary()],
          backups = []               :: [binary()],
 	 port = ?LDAP_PORT          :: inet:port_number(),
@@ -170,7 +173,7 @@ init([Host, Opts]) ->
 			  State#state.password, State#state.tls_options),
     case State#state.search of
       true ->
-	  ejabberd_router:register_route(State#state.myhost);
+	  ejabberd_router:register_route(State#state.myhost, Host);
       _ -> ok
     end,
     {ok, State}.
@@ -220,7 +223,7 @@ process_local_iq(_From, _To,
 					    [{xmlcdata,
 					      <<(translate:translate(Lang,
 								     <<"Erlang Jabber Server">>))/binary,
-						"\nCopyright (c) 2002-2015 ProcessOne">>}]},
+						"\nCopyright (c) 2002-2016 ProcessOne">>}]},
 				 #xmlel{name = <<"BDAY">>, attrs = [],
 					children =
 					    [{xmlcdata, <<"2002-11-16">>}]}]}]}
@@ -419,7 +422,7 @@ ldap_attribute_to_vcard(_, _) -> none.
 				[{xmlcdata,
 				  <<(translate:translate(Lang,
 							 <<"Search users in ">>))/binary,
-				    (jlib:jid_to_string(JID))/binary>>}]},
+				    (jid:to_string(JID))/binary>>}]},
 		     #xmlel{name = <<"instructions">>, attrs = [],
 			    children =
 				[{xmlcdata,
@@ -581,7 +584,7 @@ iq_get_vcard(Lang) ->
 		[{xmlcdata,
 		  <<(translate:translate(Lang,
 					 <<"ejabberd vCard module">>))/binary,
-		    "\nCopyright (c) 2003-2015 ProcessOne">>}]}].
+		    "\nCopyright (c) 2003-2016 ProcessOne">>}]}].
 
 -define(LFIELD(Label, Var),
 	#xmlel{name = <<"field">>,
@@ -597,7 +600,7 @@ search_result(Lang, JID, State, Data) ->
 			 [{xmlcdata,
 			   <<(translate:translate(Lang,
 						  <<"Search Results for ">>))/binary,
-			     (jlib:jid_to_string(JID))/binary>>}]},
+			     (jid:to_string(JID))/binary>>}]},
 	      #xmlel{name = <<"reported">>, attrs = [],
 		     children =
 			 [?TLFIELD(<<"text-single">>, <<"Jabber ID">>,
@@ -720,7 +723,7 @@ find_xdata_el1([]) -> false;
 find_xdata_el1([#xmlel{name = Name, attrs = Attrs,
 		       children = SubEls}
 		| Els]) ->
-    case xml:get_attr_s(<<"xmlns">>, Attrs) of
+    case fxml:get_attr_s(<<"xmlns">>, Attrs) of
       ?NS_XDATA ->
 	  #xmlel{name = Name, attrs = Attrs, children = SubEls};
       _ -> find_xdata_el1(Els)
@@ -732,14 +735,14 @@ parse_options(Host, Opts) ->
 				  <<"vjud.@HOST@">>),
     Search = gen_mod:get_opt(search, Opts,
                              fun(B) when is_boolean(B) -> B end,
-                             true),
+                             false),
     Matches = gen_mod:get_opt(matches, Opts,
                               fun(infinity) -> 0;
                                  (I) when is_integer(I), I>0 -> I
                               end, 30),
     Eldap_ID = jlib:atom_to_binary(gen_mod:get_module_proc(Host, ?PROCNAME)),
     Cfg = eldap_utils:get_config(Host, Opts),
-    UIDsTemp = eldap_utils:get_opt(
+    UIDsTemp = gen_mod:get_opt(
                  {ldap_uids, Host}, Opts,
                  fun(Us) ->
                          lists:map(
@@ -752,7 +755,7 @@ parse_options(Host, Opts) ->
                  end, [{<<"uid">>, <<"%u">>}]),
     UIDs = eldap_utils:uids_domain_subst(Host, UIDsTemp),
     SubFilter = eldap_utils:generate_subfilter(UIDs),
-    UserFilter = case eldap_utils:get_opt(
+    UserFilter = case gen_mod:get_opt(
                         {ldap_filter, Host}, Opts,
                         fun check_filter/1, <<"">>) of
                      <<"">> ->
@@ -840,3 +843,100 @@ check_filter(F) ->
     NewF = iolist_to_binary(F),
     {ok, _} = eldap_filter:parse(NewF),
     NewF.
+
+mod_opt_type(host) -> fun iolist_to_binary/1;
+mod_opt_type(iqdisc) -> fun gen_iq_handler:check_type/1;
+mod_opt_type(ldap_filter) -> fun check_filter/1;
+mod_opt_type(ldap_search_fields) ->
+    fun (Ls) ->
+	    [{iolist_to_binary(S), iolist_to_binary(P)}
+	     || {S, P} <- Ls]
+    end;
+mod_opt_type(ldap_search_reported) ->
+    fun (Ls) ->
+	    [{iolist_to_binary(S), iolist_to_binary(P)}
+	     || {S, P} <- Ls]
+    end;
+mod_opt_type(ldap_uids) ->
+    fun (Us) ->
+	    lists:map(fun ({U, P}) ->
+			      {iolist_to_binary(U), iolist_to_binary(P)};
+			  ({U}) -> {iolist_to_binary(U)}
+		      end,
+		      Us)
+    end;
+mod_opt_type(ldap_vcard_map) ->
+    fun (Ls) ->
+	    lists:map(fun ({S, [{P, L}]}) ->
+			      {iolist_to_binary(S), iolist_to_binary(P),
+			       [iolist_to_binary(E) || E <- L]}
+		      end,
+		      Ls)
+    end;
+mod_opt_type(matches) ->
+    fun (infinity) -> 0;
+	(I) when is_integer(I), I > 0 -> I
+    end;
+mod_opt_type(search) ->
+    fun (B) when is_boolean(B) -> B end;
+mod_opt_type(deref_aliases) ->
+    fun (never) -> never;
+	(searching) -> searching;
+	(finding) -> finding;
+	(always) -> always
+    end;
+mod_opt_type(ldap_backups) ->
+    fun (L) -> [iolist_to_binary(H) || H <- L] end;
+mod_opt_type(ldap_base) -> fun iolist_to_binary/1;
+mod_opt_type(ldap_deref_aliases) ->
+    fun (never) -> never;
+	(searching) -> searching;
+	(finding) -> finding;
+	(always) -> always
+    end;
+mod_opt_type(ldap_encrypt) ->
+    fun (tls) -> tls;
+	(starttls) -> starttls;
+	(none) -> none
+    end;
+mod_opt_type(ldap_password) -> fun iolist_to_binary/1;
+mod_opt_type(ldap_port) ->
+    fun (I) when is_integer(I), I > 0 -> I end;
+mod_opt_type(ldap_rootdn) -> fun iolist_to_binary/1;
+mod_opt_type(ldap_servers) ->
+    fun (L) -> [iolist_to_binary(H) || H <- L] end;
+mod_opt_type(ldap_tls_cacertfile) ->
+    fun iolist_to_binary/1;
+mod_opt_type(ldap_tls_certfile) ->
+    fun iolist_to_binary/1;
+mod_opt_type(ldap_tls_depth) ->
+    fun (I) when is_integer(I), I >= 0 -> I end;
+mod_opt_type(ldap_tls_verify) ->
+    fun (hard) -> hard;
+	(soft) -> soft;
+	(false) -> false
+    end;
+mod_opt_type(_) ->
+    [host, iqdisc, ldap_filter, ldap_search_fields,
+     ldap_search_reported, ldap_uids, ldap_vcard_map,
+     matches, search, deref_aliases, ldap_backups, ldap_base,
+     ldap_deref_aliases, ldap_encrypt, ldap_password,
+     ldap_port, ldap_rootdn, ldap_servers,
+     ldap_tls_cacertfile, ldap_tls_certfile, ldap_tls_depth,
+     ldap_tls_verify].
+
+opt_type(ldap_filter) -> fun check_filter/1;
+opt_type(ldap_uids) ->
+    fun (Us) ->
+	    lists:map(fun ({U, P}) ->
+			      {iolist_to_binary(U), iolist_to_binary(P)};
+			  ({U}) -> {iolist_to_binary(U)}
+		      end,
+		      Us)
+    end;
+opt_type(_) ->
+    [ldap_filter, ldap_uids, deref_aliases, ldap_backups, ldap_base,
+     ldap_deref_aliases, ldap_encrypt, ldap_password,
+     ldap_port, ldap_rootdn, ldap_servers,
+     ldap_tls_cacertfile, ldap_tls_certfile, ldap_tls_depth,
+     ldap_tls_verify].

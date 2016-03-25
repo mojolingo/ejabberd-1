@@ -1645,7 +1645,7 @@
 -xml(pubsub_event_item,
      #elem{name = <<"item">>,
            xmlns = <<"http://jabber.org/protocol/pubsub#event">>,
-           result = {pubsub_event_item, '$id', '$node', '$publisher'},
+           result = {pubsub_event_item, '$id', '$node', '$publisher', '$_xmls'},
            attrs = [#attr{name = <<"id">>},
                     #attr{name = <<"node">>},
                     #attr{name = <<"publisher">>}]}).
@@ -1804,16 +1804,6 @@
                           required = true,
                           dec = {dec_utc, []},
                           enc = {enc_utc, []}},
-                    #attr{name = <<"from">>,
-                          dec = {dec_jid, []},
-                          enc = {enc_jid, []}}]}).
-
--xml(legacy_delay,
-     #elem{name = <<"x">>,
-           xmlns = <<"jabber:x:delay">>,
-           result = {legacy_delay, '$stamp', '$from'},
-           attrs = [#attr{name = <<"stamp">>,
-                          required = true},
                     #attr{name = <<"from">>,
                           dec = {dec_jid, []},
                           enc = {enc_jid, []}}]}).
@@ -2073,6 +2063,163 @@
            refs = [#ref{name = muc_history, min = 0, max = 1,
                         label = '$history'}]}).
 
+-xml(rsm_after,
+     #elem{name = <<"after">>,
+           xmlns = <<"http://jabber.org/protocol/rsm">>,
+           result = '$cdata'}).
+
+-xml(rsm_before,
+     #elem{name = <<"before">>,
+           xmlns = <<"http://jabber.org/protocol/rsm">>,
+	   cdata = #cdata{default = none},
+           result = '$cdata'}).
+
+-xml(rsm_last,
+     #elem{name = <<"last">>,
+           xmlns = <<"http://jabber.org/protocol/rsm">>,
+           result = '$cdata'}).
+
+-xml(rsm_count,
+     #elem{name = <<"count">>, result = '$cdata',
+           xmlns = <<"http://jabber.org/protocol/rsm">>,
+           cdata = #cdata{dec = {dec_int, [0, infinity]},
+                          enc = {enc_int, []}}}).
+
+-xml(rsm_index,
+     #elem{name = <<"index">>, result = '$cdata',
+           xmlns = <<"http://jabber.org/protocol/rsm">>,
+           cdata = #cdata{dec = {dec_int, [0, infinity]},
+                          enc = {enc_int, []}}}).
+
+-xml(rsm_max,
+     #elem{name = <<"max">>, result = '$cdata',
+           xmlns = <<"http://jabber.org/protocol/rsm">>,
+           cdata = #cdata{dec = {dec_int, [0, infinity]},
+                          enc = {enc_int, []}}}).
+
+-xml(rsm_first,
+     #elem{name = <<"first">>,
+           xmlns = <<"http://jabber.org/protocol/rsm">>,
+           result = {rsm_first, '$index', '$data'},
+           cdata = #cdata{label = '$data'},
+           attrs = [#attr{name = <<"index">>,
+                          dec = {dec_int, [0, infinity]},
+                          enc = {enc_int, []}}]}).
+
+-xml(rsm_set,
+     #elem{name = <<"set">>,
+           xmlns = <<"http://jabber.org/protocol/rsm">>,
+           result = {rsm_set, '$after', '$before', '$count',
+                     '$first', '$index', '$last', '$max'},
+           refs = [#ref{name = rsm_after, label = '$after', min = 0, max = 1},
+                   #ref{name = rsm_before, label = '$before', min = 0, max = 1},
+                   #ref{name = rsm_count, label = '$count', min = 0, max = 1},
+                   #ref{name = rsm_first, label = '$first', min = 0, max = 1},
+                   #ref{name = rsm_index, label = '$index', min = 0, max = 1},
+                   #ref{name = rsm_last, label = '$last', min = 0, max = 1},
+                   #ref{name = rsm_max, label = '$max', min = 0, max = 1}]}).
+
+-xml(mam_start,
+     #elem{name = <<"start">>,
+           xmlns = <<"urn:xmpp:mam:tmp">>,
+           result = '$cdata',
+           cdata = #cdata{required = true,
+                          dec = {dec_utc, []},
+                          enc = {enc_utc, []}}}).
+
+-xml(mam_end,
+     #elem{name = <<"end">>,
+           xmlns = <<"urn:xmpp:mam:tmp">>,
+           result = '$cdata',
+           cdata = #cdata{required = true,
+                          dec = {dec_utc, []},
+                          enc = {enc_utc, []}}}).
+
+-xml(mam_with,
+     #elem{name = <<"with">>,
+           xmlns = <<"urn:xmpp:mam:tmp">>,
+           result = '$cdata',
+           cdata = #cdata{required = true,
+                          dec = {dec_jid, []},
+                          enc = {enc_jid, []}}}).
+
+-xml(mam_query,
+     #elem{name = <<"query">>,
+           xmlns = [<<"urn:xmpp:mam:0">>, <<"urn:xmpp:mam:tmp">>],
+           result = {mam_query, '$xmlns', '$id', '$start', '$end', '$with',
+		     '$rsm', '$xdata'},
+           attrs = [#attr{name = <<"queryid">>, label = '$id'},
+		    #attr{name = <<"xmlns">>}],
+           refs = [#ref{name = mam_start, min = 0, max = 1, label = '$start'},
+                   #ref{name = mam_end, min = 0, max = 1, label = '$end'},
+                   #ref{name = mam_with, min = 0, max = 1, label = '$with'},
+                   #ref{name = rsm_set, min = 0, max = 1, label = '$rsm'},
+		   #ref{name = xdata, min = 0, max = 1, label = '$xdata'}]}).
+
+-xml(mam_archived,
+     #elem{name = <<"archived">>,
+           xmlns = <<"urn:xmpp:mam:tmp">>,
+           result = {mam_archived, '$by', '$id'},
+           attrs = [#attr{name = <<"id">>},
+                    #attr{name = <<"by">>,
+                          required = true,
+                          dec = {dec_jid, []},
+                          enc = {enc_jid, []}}]}).
+
+-xml(mam_result,
+     #elem{name = <<"result">>,
+           xmlns = [<<"urn:xmpp:mam:0">>, <<"urn:xmpp:mam:tmp">>],
+           result = {mam_result, '$xmlns', '$queryid', '$id', '$_els'},
+           attrs = [#attr{name = <<"queryid">>},
+		    #attr{name = <<"xmlns">>},
+                    #attr{name = <<"id">>}]}).
+
+-xml(mam_jid,
+     #elem{name = <<"jid">>,
+           xmlns = <<"urn:xmpp:mam:tmp">>,
+           result = '$cdata',
+           cdata = #cdata{required = true,
+                          dec = {dec_jid, []},
+                          enc = {enc_jid, []}}}).
+
+-xml(mam_never,
+     #elem{name = <<"never">>,
+           xmlns = <<"urn:xmpp:mam:tmp">>,
+           result = '$jids',
+           refs = [#ref{name = mam_jid, label = '$jids', default = []}]}).
+
+-xml(mam_always,
+     #elem{name = <<"always">>,
+           xmlns = <<"urn:xmpp:mam:tmp">>,
+           result = '$jids',
+           refs = [#ref{name = mam_jid, label = '$jids', default = []}]}).
+
+-xml(mam_prefs,
+     #elem{name = <<"prefs">>,
+           xmlns = [<<"urn:xmpp:mam:0">>, <<"urn:xmpp:mam:tmp">>],
+           result = {mam_prefs, '$xmlns', '$default', '$always', '$never'},
+           attrs = [#attr{name = <<"default">>,
+                          dec = {dec_enum, [[always, never, roster]]},
+                          enc = {enc_enum, []}},
+		    #attr{name = <<"xmlns">>}],
+           refs = [#ref{name = mam_always, label = '$always',
+                        min = 0, max = 1, default = []},
+                   #ref{name = mam_never, label = '$never',
+                        min = 0, max = 1, default = []}]}).
+
+-xml(mam_fin,
+     #elem{name = <<"fin">>,
+	   xmlns = <<"urn:xmpp:mam:0">>,
+	   result = {mam_fin, '$id', '$rsm', '$stable', '$complete'},
+	   attrs = [#attr{name = <<"queryid">>, label = '$id'},
+		    #attr{name = <<"stable">>, label = '$stable',
+			  dec = {dec_bool, []},
+			  enc = {enc_bool, []}},
+		    #attr{name = <<"complete">>, label = '$complete',
+			  dec = {dec_bool, []},
+			  enc = {enc_bool, []}}],
+	   refs = [#ref{name = rsm_set, min = 0, max = 1, label = '$rsm'}]}).
+
 -xml(forwarded,
      #elem{name = <<"forwarded">>,
            xmlns = <<"urn:xmpp:forward:0">>,
@@ -2251,6 +2398,70 @@
                    #ref{name = error_unexpected_request,
                         min = 0, max = 1, label = '$reason'}]}).
 
+-xml(offline_purge,
+     #elem{name = <<"purge">>,
+	   xmlns = <<"http://jabber.org/protocol/offline">>,
+	   result = true}).
+
+-xml(offline_fetch,
+     #elem{name = <<"fetch">>,
+	   xmlns = <<"http://jabber.org/protocol/offline">>,
+	   result = true}).
+
+-xml(offline_item,
+     #elem{name = <<"item">>,
+	   xmlns = <<"http://jabber.org/protocol/offline">>,
+	   result = {offline_item, '$node', '$action'},
+	   attrs = [#attr{name = <<"node">>},
+		    #attr{name = <<"action">>,
+			  dec = {dec_enum, [[view, remove]]},
+                          enc = {enc_enum, []}}]}).
+
+-xml(offline,
+     #elem{name = <<"offline">>,
+	   xmlns = <<"http://jabber.org/protocol/offline">>,
+	   result = {offline, '$items', '$purge', '$fetch'},
+	   refs = [#ref{name = offline_purge, min = 0, max = 1,
+			label = '$purge', default = false},
+		   #ref{name = offline_fetch, min = 0, max = 1,
+			label = '$fetch', default = false},
+		   #ref{name = offline_item, min = 0, label = '$items'}]}).
+
+-xml(mix_subscribe,
+     #elem{name = <<"subscribe">>,
+           xmlns = <<"urn:xmpp:mix:0">>,
+           result = '$node',
+           attrs = [#attr{name = <<"node">>,
+                          required = true,
+                          label = '$node'}]}).
+
+-xml(mix_join,
+     #elem{name = <<"join">>,
+           xmlns = <<"urn:xmpp:mix:0">>,
+           result = {mix_join, '$jid', '$subscribe'},
+           attrs = [#attr{name = <<"jid">>,
+                          label = '$jid',
+                          dec = {dec_jid, []},
+                          enc = {enc_jid, []}}],
+           refs = [#ref{name = mix_subscribe, min = 0, label = '$subscribe'}]}).
+
+-xml(mix_leave,
+     #elem{name = <<"leave">>,
+           xmlns = <<"urn:xmpp:mix:0">>,
+           result = {mix_leave}}).
+
+-xml(mix_participant,
+     #elem{name = <<"participant">>,
+           xmlns = <<"urn:xmpp:mix:0">>,
+           result = {mix_participant, '$jid', '$nick'},
+           attrs = [#attr{name = <<"jid">>,
+                          required = true,
+                          label = '$jid',
+                          dec = {dec_jid, []},
+                          enc = {enc_jid, []}},
+                    #attr{name = <<"nick">>,
+                          label = '$nick'}]}).
+
 dec_tzo(Val) ->
     [H1, M1] = str:tokens(Val, <<":">>),
     H = jlib:binary_to_integer(H1),
@@ -2274,7 +2485,7 @@ enc_utc(Val) ->
     jlib:now_to_utc_string(Val).
 
 dec_jid(Val) ->
-    case jlib:string_to_jid(Val) of
+    case jid:from_string(Val) of
         error ->
             erlang:error(badarg);
         J ->
@@ -2282,10 +2493,10 @@ dec_jid(Val) ->
     end.
 
 enc_jid(J) ->            
-    jlib:jid_to_string(J).
+    jid:to_string(J).
 
 resourceprep(R) ->
-    case jlib:resourceprep(R) of
+    case jid:resourceprep(R) of
         error ->
             erlang:error(badarg);
         R1 ->

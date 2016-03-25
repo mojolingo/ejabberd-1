@@ -5,7 +5,7 @@
 %%% Created : 22 Dec 2004 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -25,11 +25,13 @@
 
 -module(ejabberd_odbc_sup).
 
+-behaviour(ejabberd_config).
+
 -author('alexey@process-one.net').
 
-%% API
 -export([start_link/1, init/1, add_pid/2, remove_pid/2,
-	 get_pids/1, get_random_pid/1, transform_options/1]).
+	 get_pids/1, get_random_pid/1, transform_options/1,
+	 opt_type/1]).
 
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -71,11 +73,14 @@ init([Host]) ->
                                       fun(mysql) -> mysql;
                                          (pgsql) -> pgsql;
                                          (sqlite) -> sqlite;
+					 (mssql) -> mssql;
                                          (odbc) -> odbc
                                       end, odbc),
     case Type of
         sqlite ->
             check_sqlite_db(Host);
+	mssql ->
+	    ejabberd_odbc:init_mssql(Host);
         _ ->
             ok
     end,
@@ -97,7 +102,7 @@ get_pids(Host) ->
 get_random_pid(Host) ->
     case get_pids(Host) of
       [] -> none;
-      Pids -> lists:nth(erlang:phash(now(), length(Pids)), Pids)
+      Pids -> lists:nth(erlang:phash(p1_time_compat:unique_integer(), length(Pids)), Pids)
     end.
 
 add_pid(Host, Pid) ->
@@ -205,3 +210,17 @@ read_lines(Fd, File, Acc) ->
             ?ERROR_MSG("Failed read from lite.sql, reason: ~p", [Err]),
             []
     end.
+
+opt_type(odbc_pool_size) ->
+    fun (I) when is_integer(I), I > 0 -> I end;
+opt_type(odbc_start_interval) ->
+    fun (I) when is_integer(I), I > 0 -> I end;
+opt_type(odbc_type) ->
+    fun (mysql) -> mysql;
+	(pgsql) -> pgsql;
+	(sqlite) -> sqlite;
+	(mssql) -> mssql;
+	(odbc) -> odbc
+    end;
+opt_type(_) ->
+    [odbc_pool_size, odbc_start_interval, odbc_type].

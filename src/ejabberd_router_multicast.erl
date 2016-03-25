@@ -3,6 +3,24 @@
 %%% Author  : Badlop <badlop@process-one.net>
 %%% Purpose : Multicast router
 %%% Created : 11 Aug 2007 by Badlop <badlop@process-one.net>
+%%%
+%%%
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
+%%%
+%%% This program is free software; you can redistribute it and/or
+%%% modify it under the terms of the GNU General Public License as
+%%% published by the Free Software Foundation; either version 2 of the
+%%% License, or (at your option) any later version.
+%%%
+%%% This program is distributed in the hope that it will be useful,
+%%% but WITHOUT ANY WARRANTY; without even the implied warranty of
+%%% MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+%%% General Public License for more details.
+%%%
+%%% You should have received a copy of the GNU General Public License along
+%%% with this program; if not, write to the Free Software Foundation, Inc.,
+%%% 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+%%%
 %%%----------------------------------------------------------------------
 
 -module(ejabberd_router_multicast).
@@ -51,7 +69,7 @@ route_multicast(From, Domain, Destinations, Packet) ->
     end.
 
 register_route(Domain) ->
-    case jlib:nameprep(Domain) of
+    case jid:nameprep(Domain) of
 	error ->
 	    erlang:error({invalid_domain, Domain});
 	LDomain ->
@@ -64,7 +82,7 @@ register_route(Domain) ->
     end.
 
 unregister_route(Domain) ->
-    case jlib:nameprep(Domain) of
+    case jid:nameprep(Domain) of
 	error ->
 	    erlang:error({invalid_domain, Domain});
 	LDomain ->
@@ -191,49 +209,29 @@ code_change(_OldVsn, State, _Extra) ->
 do_route(From, Domain, Destinations, Packet) ->
 
     ?DEBUG("route_multicast~n\tfrom ~s~n\tdomain ~s~n\tdestinations ~p~n\tpacket ~p~n",
-	   [jlib:jid_to_string(From),
+	   [jid:to_string(From),
 	    Domain,
-	    [jlib:jid_to_string(To) || To <- Destinations],
+	    [jid:to_string(To) || To <- Destinations],
 	    Packet]),
-
-    {Groups, Rest} = lists:foldr(
-                       fun(Dest, {Groups1, Rest1}) ->
-                               case ejabberd_sm:get_session_pid(Dest#jid.luser, Dest#jid.lserver, Dest#jid.lresource) of
-                                   none ->
-                                       {Groups1, [Dest|Rest1]};
-                                   Pid ->
-                                       Node = node(Pid),
-                                       if Node /= node() ->
-                                               {dict:append(Node, Dest, Groups1), Rest1};
-                                          true ->
-                                               {Groups1, [Dest|Rest1]}
-                                       end
-                               end
-                       end, {dict:new(), []}, Destinations),
-
-    dict:map(
-      fun(Node, [Single]) ->
-              ejabberd_cluster:send({ejabberd_sm, Node},
-                                    {route, From, Single, Packet});
-         (Node, Dests) ->
-              ejabberd_cluster:send({ejabberd_sm, Node},
-                                    {route_multiple, From, Dests, Packet})
-      end, Groups),
 
     %% Try to find an appropriate multicast service
     case mnesia:dirty_read(route_multicast, Domain) of
 
 	%% If no multicast service is available in this server, send manually
-	[] -> do_route_normal(From, Rest, Packet);
+	[] -> do_route_normal(From, Destinations, Packet);
 
-	%% If available, send the packet using multicast service
-	[R] ->
-	    case R#route_multicast.pid of
-		Pid when is_pid(Pid) ->
-		    Pid ! {route_trusted, From, Rest, Packet};
-		_ -> do_route_normal(From, Rest, Packet)
-	    end
+	%% If some is available, send the packet using multicast service
+	Rs when is_list(Rs) ->
+	    Pid = pick_multicast_pid(Rs),
+	    Pid ! {route_trusted, From, Destinations, Packet}
     end.
+
+pick_multicast_pid(Rs) ->
+    List = case [R || R <- Rs, node(R#route_multicast.pid) == node()] of
+	[] -> Rs;
+	RLocals -> RLocals
+    end,
+    (hd(List))#route_multicast.pid.
 
 do_route_normal(From, Destinations, Packet) ->
     [ejabberd_router:route(From, To, Packet) || To <- Destinations].

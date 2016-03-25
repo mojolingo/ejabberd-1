@@ -5,7 +5,7 @@
 %%% Created :  1 Jan 2003 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -27,6 +27,9 @@
 
 -author('alexey@process-one.net').
 
+-protocol({xep, 30, '2.4'}).
+-protocol({xep, 157, '1.0'}).
+
 -behaviour(gen_mod).
 
 -export([start/2, stop/1, process_local_iq_items/3,
@@ -36,7 +39,7 @@
 	 get_sm_identity/5, get_sm_features/5, get_sm_items/5,
 	 get_info/5, register_feature/2, unregister_feature/2,
 	 register_extra_domain/2, unregister_extra_domain/2,
-         transform_module_options/1]).
+	 transform_module_options/1, mod_opt_type/1]).
 
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -149,7 +152,7 @@ process_local_iq_items(From, To,
       set ->
 	  IQ#iq{type = error, sub_el = [SubEl, ?ERR_NOT_ALLOWED]};
       get ->
-	  Node = xml:get_tag_attr_s(<<"node">>, SubEl),
+	  Node = fxml:get_tag_attr_s(<<"node">>, SubEl),
 	  Host = To#jid.lserver,
 	  case ejabberd_hooks:run_fold(disco_local_items, Host,
 				       empty, [From, To, Node, Lang])
@@ -177,7 +180,7 @@ process_local_iq_info(From, To,
 	  IQ#iq{type = error, sub_el = [SubEl, ?ERR_NOT_ALLOWED]};
       get ->
 	  Host = To#jid.lserver,
-	  Node = xml:get_tag_attr_s(<<"node">>, SubEl),
+	  Node = fxml:get_tag_attr_s(<<"node">>, SubEl),
 	  Identity = ejabberd_hooks:run_fold(disco_local_identity,
 					     Host, [], [From, To, Node, Lang]),
 	  Info = ejabberd_hooks:run_fold(disco_info, Host, [],
@@ -302,7 +305,7 @@ process_sm_iq_items(From, To,
 	  case is_presence_subscribed(From, To) of
 	    true ->
 		Host = To#jid.lserver,
-		Node = xml:get_tag_attr_s(<<"node">>, SubEl),
+		Node = fxml:get_tag_attr_s(<<"node">>, SubEl),
 		case ejabberd_hooks:run_fold(disco_sm_items, Host,
 					     empty, [From, To, Node, Lang])
 		    of
@@ -352,19 +355,19 @@ get_sm_items(empty, From, To, _Node, _Lang) ->
       _ -> {error, ?ERR_NOT_ALLOWED}
     end.
 
-is_presence_subscribed(#jid{luser = User,
-			    lserver = Server},
-		       #jid{luser = LUser, lserver = LServer}) ->
-    lists:any(fun (#roster{jid = {TUser, TServer, _},
-			   subscription = S}) ->
-		      if LUser == TUser, LServer == TServer, S /= none ->
-			     true;
-			 true -> false
-		      end
+is_presence_subscribed(#jid{luser = User, lserver = Server},
+		       #jid{luser = User, lserver = Server}) -> true;
+is_presence_subscribed(#jid{luser = FromUser, lserver = FromServer},
+		       #jid{luser = ToUser, lserver = ToServer}) ->
+    lists:any(fun (#roster{jid = {SubUser, SubServer, _}, subscription = Sub})
+		      when FromUser == SubUser, FromServer == SubServer,
+			   Sub /= none ->
+		      true;
+		  (_RosterEntry) ->
+		      false
 	      end,
-	      ejabberd_hooks:run_fold(roster_get, Server, [],
-				      [{User, Server}]))
-      orelse User == LUser andalso Server == LServer.
+	      ejabberd_hooks:run_fold(roster_get, ToServer, [],
+				      [{ToUser, ToServer}])).
 
 process_sm_iq_info(From, To,
 		   #iq{type = Type, lang = Lang, sub_el = SubEl} = IQ) ->
@@ -375,10 +378,12 @@ process_sm_iq_info(From, To,
 	  case is_presence_subscribed(From, To) of
 	    true ->
 		Host = To#jid.lserver,
-		Node = xml:get_tag_attr_s(<<"node">>, SubEl),
+		Node = fxml:get_tag_attr_s(<<"node">>, SubEl),
 		Identity = ejabberd_hooks:run_fold(disco_sm_identity,
 						   Host, [],
 						   [From, To, Node, Lang]),
+		Info = ejabberd_hooks:run_fold(disco_info, Host, [],
+					       [From, To, Node, Lang]),
 		case ejabberd_hooks:run_fold(disco_sm_features, Host,
 					     empty, [From, To, Node, Lang])
 		    of
@@ -394,7 +399,7 @@ process_sm_iq_info(From, To,
 					    [{<<"xmlns">>, ?NS_DISCO_INFO}
 					     | ANode],
 					children =
-					    Identity ++
+					    Identity ++ Info ++
 					      features_to_xml(Features)}]};
 		  {error, Error} ->
 		      IQ#iq{type = error, sub_el = [SubEl, Error]}
@@ -516,3 +521,18 @@ values_to_xml(Values) ->
 			     children = [{xmlcdata, Value}]}
 	      end,
 	      Values).
+
+mod_opt_type(extra_domains) ->
+    fun (Hs) -> [iolist_to_binary(H) || H <- Hs] end;
+mod_opt_type(iqdisc) -> fun gen_iq_handler:check_type/1;
+mod_opt_type(server_info) ->
+    fun (L) ->
+	    lists:map(fun (Opts) ->
+			      Mods = proplists:get_value(modules, Opts, all),
+			      Name = proplists:get_value(name, Opts, <<>>),
+			      URLs = proplists:get_value(urls, Opts, []),
+			      {Mods, Name, URLs}
+		      end,
+		      L)
+    end;
+mod_opt_type(_) -> [extra_domains, iqdisc, server_info].

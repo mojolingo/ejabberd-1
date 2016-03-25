@@ -5,7 +5,7 @@
 %%% Created : 7 Aug 2011 by Stephen Röttger <stephen.roettger@googlemail.com>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -26,6 +26,8 @@
 -module(cyrsasl_scram).
 
 -author('stephen.roettger@googlemail.com').
+
+-protocol({rfc, 5802}).
 
 -export([start/1, stop/0, mech_new/4, mech_step/2]).
 
@@ -77,7 +79,7 @@ mech_step(#state{step = 2} = State, ClientIn) ->
 		      case parse_attribute(ClientNonceAttribute) of
 			{$r, ClientNonce} ->
 			    {Ret, _AuthModule} = (State#state.get_password)(UserName),
-			    case {Ret, jlib:resourceprep(Ret)} of
+			    case {Ret, jid:resourceprep(Ret)} of
 			      {false, _} -> {error, <<"not-authorized">>, UserName};
 			      {_, error} when is_binary(Ret) -> ?WARNING_MSG("invalid plain password", []), {error, <<"not-authorized">>, UserName};
 			      {Ret, _} ->
@@ -160,7 +162,7 @@ mech_step(#state{step = 4} = State, ClientIn) ->
 					 {ok, [{username, State#state.username}],
 					  <<"v=",
 					    (jlib:encode_base64(ServerSignature))/binary>>};
-				     true -> {error, <<"bad-auth">>}
+				     true -> {error, <<"bad-auth">>, State#state.username}
 				  end;
 			    _Else -> {error, <<"bad-protocol">>}
 			    end;

@@ -5,7 +5,7 @@
 %%% Created : 11 Jan 2004 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -44,14 +44,13 @@
 
 
 -module(ejabberd_ctl).
+
+-behaviour(ejabberd_config).
 -author('alexey@process-one.net').
 
--export([start/0,
-	 init/0,
-	 process/1,
-	 process2/2,
-	 register_commands/3,
-	 unregister_commands/3]).
+-export([start/0, init/0, process/1, process2/2,
+	 register_commands/3, unregister_commands/3,
+	 opt_type/1]).
 
 -include("ejabberd_ctl.hrl").
 -include("ejabberd_commands.hrl").
@@ -64,37 +63,40 @@
 %%-----------------------------
 
 start() ->
-    case init:get_plain_arguments() of
-	[SNode | Args] ->
-	    SNode1 = case string:tokens(SNode, "@") of
-			 [_Node, _Server] ->
-			     SNode;
-			 _ ->
-			     case net_kernel:longnames() of
-				 true ->
-				     lists:flatten([SNode, "@", inet_db:gethostname(),
-                                                    ".", inet_db:res_option(domain)]);
-				 false ->
-                                     lists:flatten([SNode, "@", inet_db:gethostname()]);
-				 _ ->
-				     SNode
-			     end
-		     end,
-	    Node = list_to_atom(SNode1),
-	    Status = case rpc:call(Node, ?MODULE, process, [Args]) of
-			 {badrpc, Reason} ->
-			     print("Failed RPC connection to the node ~p: ~p~n",
-				    [Node, Reason]),
-			     %% TODO: show minimal start help
-			     ?STATUS_BADRPC;
-			 S ->
-			     S
-		     end,
-	    halt(Status);
-	_ ->
-	    print_usage(),
-	    halt(?STATUS_USAGE)
-    end.
+    [SNode, Timeout, Args] = case init:get_plain_arguments() of
+                                 [SNode2, "--no-timeout" | Args2] ->
+                                     [SNode2, infinity, Args2];
+                                 [SNode3 | Args3] ->
+                                     [SNode3, 60000, Args3];
+                                 _ ->
+                                     print_usage(),
+                                     halt(?STATUS_USAGE)
+                             end,
+    SNode1 = case string:tokens(SNode, "@") of
+                 [_Node, _Server] ->
+                     SNode;
+                 _ ->
+                     case net_kernel:longnames() of
+                         true ->
+                             lists:flatten([SNode, "@", inet_db:gethostname(),
+                                            ".", inet_db:res_option(domain)]);
+                         false ->
+                             lists:flatten([SNode, "@", inet_db:gethostname()]);
+                         _ ->
+                             SNode
+                     end
+             end,
+    Node = list_to_atom(SNode1),
+    Status = case rpc:call(Node, ?MODULE, process, [Args], Timeout) of
+                 {badrpc, Reason} ->
+                     print("Failed RPC connection to the node ~p: ~p~n",
+                           [Node, Reason]),
+                     %% TODO: show minimal start help
+                     ?STATUS_BADRPC;
+                 S ->
+                     S
+             end,
+    halt(Status).
 
 init() ->
     ets:new(ejabberd_ctl_cmds, [named_table, set, public]),
@@ -210,9 +212,9 @@ process(Args) ->
 
 %% @spec (Args::[string()], AccessCommands) -> {String::string(), Code::integer()}
 process2(["--auth", User, Server, Pass | Args], AccessCommands) ->
-    process2(Args, {list_to_binary(User), list_to_binary(Server), list_to_binary(Pass)}, AccessCommands);
+    process2(Args, {list_to_binary(User), list_to_binary(Server), list_to_binary(Pass), true}, AccessCommands);
 process2(Args, AccessCommands) ->
-    process2(Args, noauth, AccessCommands).
+    process2(Args, admin, AccessCommands).
 
 process2(Args, Auth, AccessCommands) ->
     case try_run_ctp(Args, Auth, AccessCommands) of
@@ -284,7 +286,7 @@ call_command([CmdString | Args], Auth, AccessCommands) ->
     CmdStringU = ejabberd_regexp:greplace(
                    list_to_binary(CmdString), <<"-">>, <<"_">>),
     Command = list_to_atom(binary_to_list(CmdStringU)),
-    case ejabberd_commands:get_command_format(Command) of
+    case ejabberd_commands:get_command_format(Command, Auth) of
 	{error, command_unknown} ->
 	    {error, command_unknown};
 	{ArgsFormat, ResultFormat} ->
@@ -322,7 +324,7 @@ format_args(Args, ArgsFormat) ->
 format_arg(Arg, integer) ->
     format_arg2(Arg, "~d");
 format_arg(Arg, binary) ->
-    list_to_binary(format_arg(Arg, string));
+    unicode:characters_to_binary(Arg, utf8);
 format_arg("", string) ->
     "";
 format_arg(Arg, string) ->
@@ -347,11 +349,20 @@ format_result(Atom, {_Name, atom}) ->
 format_result(Int, {_Name, integer}) ->
     io_lib:format("~p", [Int]);
 
-format_result(String, {_Name, string}) when is_list(String) ->
+format_result([A|_]=String, {_Name, string}) when is_list(String) and is_integer(A) ->
     io_lib:format("~s", [String]);
 
 format_result(Binary, {_Name, string}) when is_binary(Binary) ->
     io_lib:format("~s", [binary_to_list(Binary)]);
+
+format_result(Atom, {_Name, string}) when is_atom(Atom) ->
+    io_lib:format("~s", [atom_to_list(Atom)]);
+
+format_result(Integer, {_Name, string}) when is_integer(Integer) ->
+    io_lib:format("~s", [integer_to_list(Integer)]);
+
+format_result(Other, {_Name, string})  ->
+    io_lib:format("~p", [Other]);
 
 format_result(Code, {_Name, rescode}) ->
     make_status(Code);
@@ -384,7 +395,10 @@ format_result(ElementsTuple, {_Name, {tuple, ElementsDef}}) ->
        fun({Element, ElementDef}) ->
 	       ["\t" | format_result(Element, ElementDef)]
        end,
-       ElementsAndDef)].
+       ElementsAndDef)];
+
+format_result(404, {_Name, _}) ->
+    make_status(not_found).
 
 make_status(ok) -> ?STATUS_SUCCESS;
 make_status(true) -> ?STATUS_SUCCESS;
@@ -404,7 +418,8 @@ get_list_commands() ->
     end.
 
 %% Return: {string(), [string()], string()}
-tuple_command_help({Name, Args, Desc}) ->
+tuple_command_help({Name, _Args, Desc}) ->
+    {Args, _} = ejabberd_commands:get_command_format(Name, admin),
     Arguments = [atom_to_list(ArgN) || {ArgN, _ArgF} <- Args],
     Prepend = case is_supported_args(Args) of
 		  true -> "";
@@ -458,7 +473,7 @@ print_usage(HelpMode, MaxC, ShCode) ->
 	get_list_ctls(),
 
     print(
-       ["Usage: ", ?B("ejabberdctl"), " [--node ", ?U("nodename"), "] [--auth ",
+       ["Usage: ", ?B("ejabberdctl"), " [--no-timeout] [--node ", ?U("nodename"), "] [--auth ",
 	?U("user"), " ", ?U("host"), " ", ?U("password"), "] ",
 	?U("command"), " [", ?U("options"), "]\n"
 	"\n"
@@ -715,12 +730,13 @@ print_usage_command(Cmd, C, MaxC, ShCode) ->
 		     tags = TagsAtoms,
 		     desc = Desc,
 		     longdesc = LongDesc,
-		     args = ArgsDef,
 		     result = ResultDef} = C,
 
     NameFmt = ["  ", ?B("Command Name"), ": ", Cmd, "\n"],
 
     %% Initial indentation of result is 13 = length("  Arguments: ")
+    {ArgsDef, _} = ejabberd_commands:get_command_format(
+                     C#ejabberd_commands.name, admin),
     Args = [format_usage_ctype(ArgDef, 13) || ArgDef <- ArgsDef],
     ArgsMargin = lists:duplicate(13, $\s),
     ArgsListFmt = case Args of
@@ -792,3 +808,7 @@ print(Format, Args) ->
 %%format_usage_xmlrpc(ArgsDef, ResultDef) ->
 %%    ["aaaa bbb ccc"].
 
+
+opt_type(ejabberdctl_access_commands) ->
+    fun (V) when is_list(V) -> V end;
+opt_type(_) -> [ejabberdctl_access_commands].

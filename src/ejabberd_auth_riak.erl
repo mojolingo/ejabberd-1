@@ -5,7 +5,7 @@
 %%% Created : 12 Nov 2012 by Evgeniy Khramtsov <ekhramtsov@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -30,8 +30,8 @@
 -behaviour(ejabberd_auth).
 
 %% External exports
--export([start/1, set_password/3, check_password/3,
-	 check_password/5, try_register/3,
+-export([start/1, set_password/3, check_password/4,
+	 check_password/6, try_register/3,
 	 dirty_get_registered_users/0, get_vh_registered_users/1,
 	 get_vh_registered_users/2,
 	 get_vh_registered_users_number/1,
@@ -66,9 +66,12 @@ store_type() ->
 passwd_schema() ->
     {record_info(fields, passwd), #passwd{}}.
 
-check_password(User, Server, Password) ->
-    LUser = jlib:nodeprep(User),
-    LServer = jlib:nameprep(Server),
+check_password(User, AuthzId, Server, Password) ->
+    if AuthzId /= <<>> andalso AuthzId /= User ->
+        false;
+    true ->
+        LUser = jid:nodeprep(User),
+        LServer = jid:nameprep(Server),
     case ejabberd_riak:get(passwd, passwd_schema(), {LUser, LServer}) of
         {ok, #passwd{password = Password}} when is_binary(Password) ->
             Password /= <<"">>;
@@ -76,12 +79,16 @@ check_password(User, Server, Password) ->
             is_password_scram_valid(Password, Scram);
         _ ->
             false
+        end
     end.
 
-check_password(User, Server, Password, Digest,
+check_password(User, AuthzId, Server, Password, Digest,
 	       DigestGen) ->
-    LUser = jlib:nodeprep(User),
-    LServer = jlib:nameprep(Server),
+    if AuthzId /= <<>> andalso AuthzId /= User ->
+        false;
+    true ->
+        LUser = jid:nodeprep(User),
+        LServer = jid:nameprep(Server),
     case ejabberd_riak:get(passwd, passwd_schema(), {LUser, LServer}) of
       {ok, #passwd{password = Passwd}} when is_binary(Passwd) ->
 	  DigRes = if Digest /= <<"">> ->
@@ -102,11 +109,12 @@ check_password(User, Server, Password, Digest,
 	     true -> (Passwd == Password) and (Password /= <<"">>)
 	  end;
       _ -> false
+        end
     end.
 
 set_password(User, Server, Password) ->
-    LUser = jlib:nodeprep(User),
-    LServer = jlib:nameprep(Server),
+    LUser = jid:nodeprep(User),
+    LServer = jid:nameprep(Server),
     US = {LUser, LServer},
     if (LUser == error) or (LServer == error) ->
 	   {error, invalid_jid};
@@ -122,9 +130,12 @@ set_password(User, Server, Password) ->
     end.
 
 try_register(User, Server, PasswordList) ->
-    LUser = jlib:nodeprep(User),
-    LServer = jlib:nameprep(Server),
-    Password = iolist_to_binary(PasswordList),
+    LUser = jid:nodeprep(User),
+    LServer = jid:nameprep(Server),
+    Password = if is_list(PasswordList); is_binary(PasswordList) ->
+      iolist_to_binary(PasswordList);
+      true -> PasswordList
+    end,
     US = {LUser, LServer},
     if (LUser == error) or (LServer == error) ->
 	   {error, invalid_jid};
@@ -156,7 +167,7 @@ dirty_get_registered_users() ->
       end, ejabberd_config:get_vh_by_auth_method(riak)).
 
 get_vh_registered_users(Server) ->
-    LServer = jlib:nameprep(Server),
+    LServer = jid:nameprep(Server),
     case ejabberd_riak:get_keys_by_index(passwd, <<"host">>, LServer) of
         {ok, Users} ->
             Users;
@@ -168,7 +179,7 @@ get_vh_registered_users(Server, _) ->
     get_vh_registered_users(Server).
 
 get_vh_registered_users_number(Server) ->
-    LServer = jlib:nameprep(Server),
+    LServer = jid:nameprep(Server),
     case ejabberd_riak:count_by_index(passwd, <<"host">>, LServer) of
         {ok, N} ->
             N;
@@ -180,8 +191,8 @@ get_vh_registered_users_number(Server, _) ->
     get_vh_registered_users_number(Server).
 
 get_password(User, Server) ->
-    LUser = jlib:nodeprep(User),
-    LServer = jlib:nameprep(Server),
+    LUser = jid:nodeprep(User),
+    LServer = jid:nameprep(Server),
     case ejabberd_riak:get(passwd, passwd_schema(), {LUser, LServer}) of
       {ok, #passwd{password = Password}}
 	  when is_binary(Password) ->
@@ -196,8 +207,8 @@ get_password(User, Server) ->
     end.
 
 get_password_s(User, Server) ->
-    LUser = jlib:nodeprep(User),
-    LServer = jlib:nameprep(Server),
+    LUser = jid:nodeprep(User),
+    LServer = jid:nameprep(Server),
     case ejabberd_riak:get(passwd, passwd_schema(), {LUser, LServer}) of
       {ok, #passwd{password = Password}}
 	  when is_binary(Password) ->
@@ -209,8 +220,8 @@ get_password_s(User, Server) ->
     end.
 
 is_user_exists(User, Server) ->
-    LUser = jlib:nodeprep(User),
-    LServer = jlib:nameprep(Server),
+    LUser = jid:nodeprep(User),
+    LServer = jid:nameprep(Server),
     case ejabberd_riak:get(passwd, passwd_schema(), {LUser, LServer}) of
       {error, notfound} -> false;
       {ok, _} -> true;
@@ -218,14 +229,14 @@ is_user_exists(User, Server) ->
     end.
 
 remove_user(User, Server) ->
-    LUser = jlib:nodeprep(User),
-    LServer = jlib:nameprep(Server),
+    LUser = jid:nodeprep(User),
+    LServer = jid:nameprep(Server),
     ejabberd_riak:delete(passwd, {LUser, LServer}),
     ok.
 
 remove_user(User, Server, Password) ->
-    LUser = jlib:nodeprep(User),
-    LServer = jlib:nameprep(Server),
+    LUser = jid:nodeprep(User),
+    LServer = jid:nameprep(Server),
     case ejabberd_riak:get(passwd, passwd_schema(), {LUser, LServer}) of
         {ok, #passwd{password = Password}}
           when is_binary(Password) ->

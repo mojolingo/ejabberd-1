@@ -5,7 +5,7 @@
 %%% Created : 22 Aug 2005 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -29,7 +29,8 @@
 
 -include("logger.hrl").
 
--export([export/2, export/3, import_file/2, import/2, import/3]).
+-export([export/2, export/3, import_file/2, import/2,
+	 import/3, delete/1]).
 
 -define(MAX_RECORDS_PER_TRANSACTION, 100).
 
@@ -54,14 +55,14 @@ modules() ->
      mod_offline,
      mod_privacy,
      mod_private,
-     mod_pubsub,
+     %% mod_pubsub,
      mod_roster,
      mod_shared_roster,
      mod_vcard,
      mod_vcard_xupdate].
 
 export(Server, Output) ->
-    LServer = jlib:nameprep(iolist_to_binary(Server)),
+    LServer = jid:nameprep(iolist_to_binary(Server)),
     Modules = modules(),
     IO = prepare_output(Output),
     lists:foreach(
@@ -71,13 +72,27 @@ export(Server, Output) ->
     close_output(Output, IO).
 
 export(Server, Output, Module) ->
-    LServer = jlib:nameprep(iolist_to_binary(Server)),
+    LServer = jid:nameprep(iolist_to_binary(Server)),
     IO = prepare_output(Output),
     lists:foreach(
       fun({Table, ConvertFun}) ->
               export(LServer, Table, IO, ConvertFun)
       end, Module:export(Server)),
     close_output(Output, IO).
+
+delete(Server) ->
+    Modules = modules(),
+    lists:foreach(
+      fun(Module) ->
+              delete(Server, Module)
+      end, Modules).
+
+delete(Server, Module) ->
+    LServer = jid:nameprep(iolist_to_binary(Server)),
+    lists:foreach(
+      fun({Table, ConvertFun}) ->
+              delete(LServer, Table, ConvertFun)
+      end, Module:export(Server)).
 
 import_file(Server, FileName) when is_binary(FileName) ->
     import(Server, binary_to_list(FileName));
@@ -86,7 +101,7 @@ import_file(Server, FileName) ->
                         {file, FileName},
                         {mode, read_only}]) of
         {ok, Fd} ->
-            LServer = jlib:nameprep(Server),
+            LServer = jid:nameprep(Server),
             Mods = [{Mod, gen_mod:db_type(LServer, Mod)}
                     || Mod <- modules(), gen_mod:is_loaded(LServer, Mod)],
             AuthMods = case lists:member(ejabberd_auth_internal,
@@ -105,7 +120,7 @@ import(Server, Output) ->
     import(Server, Output, [{fast, true}]).
 
 import(Server, Output, Opts) ->
-    LServer = jlib:nameprep(iolist_to_binary(Server)),
+    LServer = jid:nameprep(iolist_to_binary(Server)),
     Modules = modules(),
     IO = prepare_output(Output, disk_log),
     lists:foreach(
@@ -115,7 +130,7 @@ import(Server, Output, Opts) ->
     close_output(Output, IO).
 
 import(Server, Output, Opts, Module) ->
-    LServer = jlib:nameprep(iolist_to_binary(Server)),
+    LServer = jid:nameprep(iolist_to_binary(Server)),
     IO = prepare_output(Output, disk_log),
     lists:foreach(
       fun({SelectQuery, ConvertFun}) ->
@@ -158,6 +173,25 @@ output(LServer, _Table, odbc, SQLs) ->
 output(_LServer, Table, Fd, SQLs) ->
     file:write(Fd, ["-- \n-- Mnesia table: ", atom_to_list(Table),
                     "\n--\n", SQLs]).
+
+delete(LServer, Table, ConvertFun) ->
+    F = fun () ->
+                mnesia:write_lock_table(Table),
+                {_N, SQLs} =
+                    mnesia:foldl(
+                      fun(R, {N, SQLs} = Acc) ->
+                              case ConvertFun(LServer, R) of
+                                  [] ->
+                                      Acc;
+                                  _SQL ->
+				      mnesia:delete_object(R),
+                                      Acc
+                              end
+                      end,
+                      {0, []}, Table),
+                delete(LServer, Table, SQLs)
+        end,
+    mnesia:transaction(F).
 
 import(LServer, SelectQuery, IO, ConvertFun, Opts) ->
     F = case proplists:get_bool(fast, Opts) of

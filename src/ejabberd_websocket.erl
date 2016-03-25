@@ -33,10 +33,12 @@
 %%% NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 %%% POSSIBILITY OF SUCH DAMAGE.
 %%% ==========================================================================================================
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%----------------------------------------------------------------------
 
 -module(ejabberd_websocket).
+
+-protocol({rfc, 6455}).
 
 -author('ecestari@process-one.net').
 
@@ -86,7 +88,8 @@ check(_Path, Headers) ->
     end.
 
 socket_handoff(LocalPath, #request{method = 'GET', ip = IP, q = Q, path = Path,
-                                   headers = Headers, host = Host, port = Port},
+                                   headers = Headers, host = Host, port = Port,
+                                   opts = HOpts},
                Socket, SockMod, Buf, _Opts, HandlerModule, InfoMsgFun) ->
     case check(LocalPath, Headers) of
         true ->
@@ -99,7 +102,8 @@ socket_handoff(LocalPath, #request{method = 'GET', ip = IP, q = Q, path = Path,
                      path = Path,
                      headers = Headers,
                      local_path = LocalPath,
-                     buf = Buf},
+                     buf = Buf,
+                     http_opts = HOpts},
 
             connect(WS, HandlerModule);
         _ ->
@@ -369,10 +373,10 @@ process_frame(#frame_info{unprocessed =
     process_frame(FrameInfo#frame_info{unprocessed = <<>>},
                   <<UnprocessedPre/binary, Data/binary>>).
 
-handle_data(tcp, FrameInfo, Data, Socket, WsHandleLoopPid, p1_tls) ->
-    case p1_tls:recv_data(Socket, Data) of
+handle_data(tcp, FrameInfo, Data, Socket, WsHandleLoopPid, fast_tls) ->
+    case fast_tls:recv_data(Socket, Data) of
         {ok, NewData} ->
-            handle_data_int(FrameInfo, NewData, Socket, WsHandleLoopPid, p1_tls);
+            handle_data_int(FrameInfo, NewData, Socket, WsHandleLoopPid, fast_tls);
         {error, Error} ->
             {error, Error}
     end;

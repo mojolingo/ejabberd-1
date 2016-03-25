@@ -1,6 +1,6 @@
 %%%-------------------------------------------------------------------
 %%% @author Evgeniy Khramtsov <>
-%%% @copyright (C) 2013, Evgeniy Khramtsov
+%%% @copyright (C) 2013-2016, Evgeniy Khramtsov
 %%% @doc
 %%%
 %%% @end
@@ -21,13 +21,31 @@ init_config(Config) ->
     PrivDir = proplists:get_value(priv_dir, Config),
     [_, _|Tail] = lists:reverse(filename:split(DataDir)),
     BaseDir = filename:join(lists:reverse(Tail)),
-    ConfigPath = filename:join([DataDir, "ejabberd.yml"]),
+    ConfigPathTpl = filename:join([DataDir, "ejabberd.yml"]),
     LogPath = filename:join([PrivDir, "ejabberd.log"]),
     SASLPath = filename:join([PrivDir, "sasl.log"]),
     MnesiaDir = filename:join([PrivDir, "mnesia"]),
     CertFile = filename:join([DataDir, "cert.pem"]),
     {ok, CWD} = file:get_cwd(),
     {ok, _} = file:copy(CertFile, filename:join([CWD, "cert.pem"])),
+    {ok, CfgContentTpl} = file:read_file(ConfigPathTpl),
+    CfgContent = process_config_tpl(CfgContentTpl, [
+                                                    {c2s_port, 5222},
+                                                    {s2s_port, 5269},
+                                                    {web_port, 5280},
+                                                    {mysql_server, <<"localhost">>},
+                                                    {mysql_port, 3306},
+                                                    {mysql_db, <<"ejabberd_test">>},
+                                                    {mysql_user, <<"ejabberd_test">>},
+                                                    {mysql_pass, <<"ejabberd_test">>},
+                                                    {pgsql_server, <<"localhost">>},
+                                                    {pgsql_port, 5432},
+                                                    {pgsql_db, <<"ejabberd_test">>},
+                                                    {pgsql_user, <<"ejabberd_test">>},
+                                                    {pgsql_pass, <<"ejabberd_test">>}
+                                                   ]),
+    ConfigPath = filename:join([CWD, "ejabberd.yml"]),
+    ok = file:write_file(ConfigPath, CfgContent),
     ok = application:load(sasl),
     ok = application:load(mnesia),
     ok = application:load(ejabberd),
@@ -35,7 +53,7 @@ init_config(Config) ->
     application:set_env(ejabberd, log_path, LogPath),
     application:set_env(sasl, sasl_error_logger, {file, SASLPath}),
     application:set_env(mnesia, dir, MnesiaDir),
-    [{server_port, 5222},
+    [{server_port, ct:get_config(c2s_port, 5222)},
      {server_host, "localhost"},
      {server, ?COMMON_VHOST},
      {user, <<"test_single">>},
@@ -47,8 +65,35 @@ init_config(Config) ->
      {resource, <<"resource">>},
      {master_resource, <<"master_resource">>},
      {slave_resource, <<"slave_resource">>},
-     {password, <<"password">>}
+     {password, <<"password">>},
+     {backends, get_config_backends()}
      |Config].
+
+%% Read environment variable CT_DB=riak,mysql to limit the backends to test.
+%% You can thus limit the backend you want to test with:
+%%  CT_BACKENDS=riak,mysql rebar ct suites=ejabberd
+get_config_backends() ->
+    case os:getenv("CT_BACKENDS") of
+        false  -> all;
+        String ->
+            Backends0 = string:tokens(String, ","),
+            lists:map(fun(Backend) -> string:strip(Backend, both, $ ) end, Backends0)
+    end.
+
+process_config_tpl(Content, []) ->
+    Content;
+process_config_tpl(Content, [{Name, DefaultValue} | Rest]) ->
+    Val = case ct:get_config(Name, DefaultValue) of
+              V1 when is_integer(V1) ->
+                  integer_to_binary(V1);
+              V2 when is_atom(V2) ->
+                  atom_to_binary(V2, latin1);
+              V3 ->
+                  V3
+          end,
+    NewContent = binary:replace(Content, <<"@@",(atom_to_binary(Name, latin1))/binary, "@@">>, Val),
+    process_config_tpl(NewContent, Rest).
+
 
 connect(Config) ->
     {ok, Sock} = ejabberd_socket:connect(
@@ -61,8 +106,8 @@ init_stream(Config) ->
     ok = send_text(Config, io_lib:format(?STREAM_HEADER,
                                           [?config(server, Config)])),
     {xmlstreamstart, <<"stream:stream">>, Attrs} = recv(),
-    <<"jabber:client">> = xml:get_attr_s(<<"xmlns">>, Attrs),
-    <<"1.0">> = xml:get_attr_s(<<"version">>, Attrs),
+    <<"jabber:client">> = fxml:get_attr_s(<<"xmlns">>, Attrs),
+    <<"1.0">> = fxml:get_attr_s(<<"version">>, Attrs),
     #stream_features{sub_els = Fs} = recv(),
     Mechs = lists:flatmap(
               fun(#sasl_mechanisms{list = Ms}) ->
@@ -149,8 +194,8 @@ wait_auth_SASL_result(Config) ->
                       io_lib:format(?STREAM_HEADER,
                                     [?config(server, Config)])),
             {xmlstreamstart, <<"stream:stream">>, Attrs} = recv(),
-            <<"jabber:client">> = xml:get_attr_s(<<"xmlns">>, Attrs),
-            <<"1.0">> = xml:get_attr_s(<<"version">>, Attrs),
+            <<"jabber:client">> = fxml:get_attr_s(<<"xmlns">>, Attrs),
+            <<"1.0">> = fxml:get_attr_s(<<"version">>, Attrs),
             #stream_features{sub_els = Fs} = recv(),
 	    lists:foldl(
 	      fun(#feature_sm{}, ConfigAcc) ->
@@ -174,6 +219,11 @@ re_register(Config) ->
     Pass = ?config(password, Config),
     {atomic, ok} = ejabberd_auth:try_register(User, Server, Pass),
     ok.
+
+match_failure(Received, [Match]) when is_list(Match)->
+    ct:fail("Received input:~n~n~p~n~ndon't match expected patterns:~n~n~s", [Received, Match]);
+match_failure(Received, Matches) ->
+    ct:fail("Received input:~n~n~p~n~ndon't match expected patterns:~n~n~p", [Received, Matches]).
 
 recv() ->
     receive
@@ -217,7 +267,7 @@ send(State, Pkt) ->
                       end,
     El = xmpp_codec:encode(NewPkt),
     ct:pal("sent: ~p <-~n~s", [El, xmpp_codec:pp(NewPkt)]),
-    ok = send_text(State, xml:element_to_binary(El)),
+    ok = send_text(State, fxml:element_to_binary(El)),
     NewID.
 
 send_recv(State, IQ) ->
@@ -233,7 +283,7 @@ sasl_new(<<"DIGEST-MD5">>, User, Server, Password) ->
 	     case cyrsasl_digest:parse(ServerIn) of
 	       bad -> {error, <<"Invalid SASL challenge">>};
 	       KeyVals ->
-		   Nonce = xml:get_attr_s(<<"nonce">>, KeyVals),
+		   Nonce = fxml:get_attr_s(<<"nonce">>, KeyVals),
 		   CNonce = id(),
                    Realm = proplists:get_value(<<"realm">>, KeyVals, Server),
 		   DigestURI = <<"xmpp/", Realm/binary>>,
@@ -293,28 +343,36 @@ response(User, Passwd, Nonce, AuthzId, Realm, CNonce,
     hex((erlang:md5(T))).
 
 my_jid(Config) ->
-    jlib:make_jid(?config(user, Config),
-                  ?config(server, Config),
-                  ?config(resource, Config)).
+    jid:make(?config(user, Config),
+	     ?config(server, Config),
+	     ?config(resource, Config)).
 
 server_jid(Config) ->
-    jlib:make_jid(<<>>, ?config(server, Config), <<>>).
+    jid:make(<<>>, ?config(server, Config), <<>>).
 
 pubsub_jid(Config) ->
     Server = ?config(server, Config),
-    jlib:make_jid(<<>>, <<"pubsub.", Server/binary>>, <<>>).
+    jid:make(<<>>, <<"pubsub.", Server/binary>>, <<>>).
 
 proxy_jid(Config) ->
     Server = ?config(server, Config),
-    jlib:make_jid(<<>>, <<"proxy.", Server/binary>>, <<>>).
+    jid:make(<<>>, <<"proxy.", Server/binary>>, <<>>).
 
 muc_jid(Config) ->
     Server = ?config(server, Config),
-    jlib:make_jid(<<>>, <<"conference.", Server/binary>>, <<>>).
+    jid:make(<<>>, <<"conference.", Server/binary>>, <<>>).
 
 muc_room_jid(Config) ->
     Server = ?config(server, Config),
-    jlib:make_jid(<<"test">>, <<"conference.", Server/binary>>, <<>>).
+    jid:make(<<"test">>, <<"conference.", Server/binary>>, <<>>).
+
+mix_jid(Config) ->
+    Server = ?config(server, Config),
+    jid:make(<<>>, <<"mix.", Server/binary>>, <<>>).
+
+mix_room_jid(Config) ->
+    Server = ?config(server, Config),
+    jid:make(<<"test">>, <<"mix.", Server/binary>>, <<>>).
 
 id() ->
     id(undefined).

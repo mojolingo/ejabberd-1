@@ -5,7 +5,7 @@
 %%% Created :
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -43,8 +43,10 @@
 %% request_handlers callbacks
 -export([process/2]).
 
-%% ejabberd_hooks callbacks
--export([reopen_log/1]).
+%% utility for other http modules
+-export([content_type/3]).
+
+-export([reopen_log/1, mod_opt_type/1]).
 
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -85,8 +87,6 @@
 	 {<<".xml">>, <<"application/xml">>},
 	 {<<".xpi">>, <<"application/x-xpinstall">>},
 	 {<<".xul">>, <<"application/vnd.mozilla.xul+xml">>}]).
-
--compile(export_all).
 
 %%====================================================================
 %% gen_mod callbacks
@@ -168,10 +168,17 @@ initialize(Host, Opts) ->
                                          ?DEFAULT_CONTENT_TYPE),
     ContentTypes = build_list_content_types(
                      gen_mod:get_opt(content_types, Opts,
-                                     fun(L) when is_list(L) -> L end,
-                                     []),
+                                     fun(L) when is_list(L) ->
+					     lists:map(
+					       fun({K, V}) ->
+						       {iolist_to_binary(K),
+							iolist_to_binary(V)}
+					       end, L)
+				     end, []),
                      ?DEFAULT_CONTENT_TYPES),
-    ?INFO_MSG("initialize: ~n ~p", [ContentTypes]),%+++
+    ?INFO_MSG("known content types: ~s",
+	      [str:join([[$*, K, " -> ", V] || {K, V} <- ContentTypes],
+			<<", ">>)]),
     {DocRoot, AccessLog, AccessLogFD, DirectoryIndices,
      CustomHeaders, DefaultContentType, ContentTypes}.
 
@@ -448,3 +455,17 @@ ip_to_string(Address) when size(Address) == 4 ->
 ip_to_string(Address) when size(Address) == 8 ->
     Parts = lists:map(fun (Int) -> io_lib:format("~.16B", [Int]) end, tuple_to_list(Address)),
     string:to_lower(lists:flatten(join(Parts, ":"))).
+
+mod_opt_type(accesslog) -> fun iolist_to_binary/1;
+mod_opt_type(content_types) ->
+    fun (L) when is_list(L) -> L end;
+mod_opt_type(custom_headers) ->
+    fun (L) when is_list(L) -> L end;
+mod_opt_type(default_content_type) ->
+    fun iolist_to_binary/1;
+mod_opt_type(directory_indices) ->
+    fun (L) when is_list(L) -> L end;
+mod_opt_type(docroot) -> fun (A) -> A end;
+mod_opt_type(_) ->
+    [accesslog, content_types, custom_headers,
+     default_content_type, directory_indices, docroot].

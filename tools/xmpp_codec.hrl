@@ -1,4 +1,4 @@
-%% Created automatically by XML generator (xml_gen.erl)
+%% Created automatically by XML generator (fxml_gen.erl)
 %% Source: xmpp_codec.spec
 
 -record(chatstate, {type :: active | composing | gone | inactive | paused}).
@@ -8,6 +8,14 @@
 -record(feature_register, {}).
 
 -record(sasl_success, {text :: any()}).
+
+-record(mam_result, {xmlns :: binary(),
+                     queryid :: binary(),
+                     id :: binary(),
+                     sub_els = [] :: [any()]}).
+
+-record(rsm_first, {index :: non_neg_integer(),
+                    data :: binary()}).
 
 -record(text, {lang :: binary(),
                data :: binary()}).
@@ -27,6 +35,8 @@
 -record(pubsub_unsubscribe, {node :: binary(),
                              jid :: any(),
                              subid :: binary()}).
+
+-record(mix_leave, {}).
 
 -record(ping, {}).
 
@@ -90,7 +100,8 @@
 
 -record(pubsub_event_item, {id :: binary(),
                             node :: binary(),
-                            publisher :: binary()}).
+                            publisher :: binary(),
+                            xml_els = [] :: [any()]}).
 
 -record(sm_r, {xmlns :: binary()}).
 
@@ -137,9 +148,6 @@
 
 -record(feature_csi, {xmlns :: binary()}).
 
--record(legacy_delay, {stamp :: binary(),
-                       from :: any()}).
-
 -record(muc_user_destroy, {reason :: binary(),
                            jid :: any()}).
 
@@ -179,6 +187,11 @@
 
 -record(shim, {headers = [] :: [{binary(),'undefined' | binary()}]}).
 
+-record(mam_prefs, {xmlns :: binary(),
+                    default :: 'always' | 'never' | 'roster',
+                    always = [] :: [any()],
+                    never = [] :: [any()]}).
+
 -record(caps, {hash :: binary(),
                node :: binary(),
                ver :: any()}).
@@ -196,6 +209,9 @@
                        items = [] :: [#pubsub_item{}]}).
 
 -record(carbons_sent, {forwarded :: #forwarded{}}).
+
+-record(mam_archived, {by :: any(),
+                       id :: binary()}).
 
 -record(p1_rebind, {}).
 
@@ -215,6 +231,9 @@
 -record(pubsub_retract, {node :: binary(),
                          notify = false :: any(),
                          items = [] :: [#pubsub_item{}]}).
+
+-record(mix_participant, {jid :: any(),
+                          nick :: binary()}).
 
 -record(vcard_geo, {lat :: binary(),
                     lon :: binary()}).
@@ -265,6 +284,19 @@
 
 -record(vcard_org, {name :: binary(),
                     units = [] :: [binary()]}).
+
+-record(rsm_set, {'after' :: binary(),
+                  before :: 'none' | binary(),
+                  count :: non_neg_integer(),
+                  first :: #rsm_first{},
+                  index :: non_neg_integer(),
+                  last :: binary(),
+                  max :: non_neg_integer()}).
+
+-record(mam_fin, {id :: binary(),
+                  rsm :: #rsm_set{},
+                  stable :: any(),
+                  complete :: any()}).
 
 -record(vcard_tel, {home = false :: boolean(),
                     work = false :: boolean(),
@@ -346,6 +378,14 @@
                 items = [] :: [[#xdata_field{}]],
                 fields = [] :: [#xdata_field{}]}).
 
+-record(mam_query, {xmlns :: binary(),
+                    id :: binary(),
+                    start :: any(),
+                    'end' :: any(),
+                    with :: any(),
+                    rsm :: #rsm_set{},
+                    xdata :: #xdata{}}).
+
 -record(muc_owner, {destroy :: #muc_owner_destroy{},
                     config :: #xdata{}}).
 
@@ -390,6 +430,13 @@
                      features = [] :: [binary()],
                      xdata = [] :: [#xdata{}]}).
 
+-record(offline_item, {node :: binary(),
+                       action :: 'remove' | 'view'}).
+
+-record(offline, {items = [] :: [#offline_item{}],
+                  purge = false :: boolean(),
+                  fetch = false :: boolean()}).
+
 -record(sasl_mechanisms, {list = [] :: [binary()]}).
 
 -record(sm_failed, {reason :: atom() | #gone{} | #redirect{},
@@ -429,6 +476,9 @@
              to :: any(),
              error :: #error{},
              sub_els = [] :: [any()]}).
+
+-record(mix_join, {jid :: any(),
+                   subscribe = [] :: [binary()]}).
 
 -record(privacy_item, {order :: non_neg_integer(),
                        action :: 'allow' | 'deny',

@@ -1,5 +1,5 @@
 --
--- ejabberd, Copyright (C) 2002-2015   ProcessOne
+-- ejabberd, Copyright (C) 2002-2016   ProcessOne
 --
 -- This program is free software; you can redistribute it and/or
 -- modify it under the terms of the GNU General Public License as
@@ -270,3 +270,43 @@ CREATE TABLE caps_features (
 );
 
 CREATE INDEX i_caps_features_node_subnode ON caps_features (node, subnode);
+
+CREATE TABLE archive (
+    username text NOT NULL,
+    timestamp BIGINT UNSIGNED NOT NULL,
+    peer text NOT NULL,
+    bare_peer text NOT NULL,
+    xml text NOT NULL,
+    txt text,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind text,
+    nick text,
+    created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX i_username ON archive(username);
+CREATE INDEX i_timestamp ON archive(timestamp);
+CREATE INDEX i_peer ON archive(peer);
+CREATE INDEX i_bare_peer ON archive(bare_peer);
+
+CREATE TABLE archive_prefs (
+    username text NOT NULL PRIMARY KEY,
+    def text NOT NULL,
+    always text NOT NULL,
+    never text NOT NULL,
+    created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE sm (
+    usec bigint NOT NULL,
+    pid text NOT NULL,
+    node text NOT NULL,
+    username text NOT NULL,
+    resource text NOT NULL,
+    priority text NOT NULL,
+    info text NOT NULL
+);
+
+CREATE UNIQUE INDEX i_sm_sid ON sm(usec, pid);
+CREATE INDEX i_sm_node ON sm(node);
+CREATE INDEX i_sm_username ON sm(username);

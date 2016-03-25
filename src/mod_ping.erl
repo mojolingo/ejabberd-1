@@ -5,7 +5,7 @@
 %%% Created : 11 Jul 2009 by Brian Cully <bjc@kublai.com>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -26,6 +26,8 @@
 -module(mod_ping).
 
 -author('bjc@kublai.com').
+
+-protocol({xep, 199, '2.0'}).
 
 -behavior(gen_mod).
 
@@ -54,14 +56,14 @@
 -export([init/1, terminate/2, handle_call/3,
 	 handle_cast/2, handle_info/2, code_change/3]).
 
-%% Hook callbacks
 -export([iq_ping/3, user_online/3, user_offline/3,
-	 user_send/3]).
+	 user_send/4, mod_opt_type/1]).
 
 -record(state,
 	{host = <<"">>,
          send_pings = ?DEFAULT_SEND_PINGS :: boolean(),
 	 ping_interval = ?DEFAULT_PING_INTERVAL :: non_neg_integer(),
+	 ping_ack_timeout = undefined :: non_neg_integer(),
 	 timeout_action = none :: none | kill,
          timers = (?DICT):new() :: ?TDICT}).
 
@@ -105,6 +107,9 @@ init([Host, Opts]) ->
     PingInterval = gen_mod:get_opt(ping_interval, Opts,
                                    fun(I) when is_integer(I), I>0 -> I end,
 				   ?DEFAULT_PING_INTERVAL),
+    PingAckTimeout = gen_mod:get_opt(ping_ack_timeout, Opts,
+                                     fun(I) when is_integer(I), I>0 -> I * 1000 end,
+                                     undefined),
     TimeoutAction = gen_mod:get_opt(timeout_action, Opts,
                                     fun(none) -> none;
                                        (kill) -> kill
@@ -130,6 +135,7 @@ init([Host, Opts]) ->
      #state{host = Host, send_pings = SendPings,
 	    ping_interval = PingInterval,
 	    timeout_action = TimeoutAction,
+	    ping_ack_timeout = PingAckTimeout,
 	    timers = (?DICT):new()}}.
 
 terminate(_Reason, #state{host = Host}) ->
@@ -168,7 +174,7 @@ handle_cast({iq_pong, JID, timeout}, State) ->
 	      JID,
 	  case ejabberd_sm:get_session_pid(User, Server, Resource)
 	      of
-	    Pid when is_pid(Pid) -> ejabberd_c2s:stop(Pid);
+	    Pid when is_pid(Pid) -> ejabberd_c2s:close(Pid);
 	    _ -> ok
 	  end;
       _ -> ok
@@ -185,8 +191,8 @@ handle_info({timeout, _TRef, {ping, JID}}, State) ->
     F = fun (Response) ->
 		gen_server:cast(Pid, {iq_pong, JID, Response})
 	end,
-    From = jlib:make_jid(<<"">>, State#state.host, <<"">>),
-    ejabberd_local:route_iq(From, JID, IQ, F),
+    From = jid:make(<<"">>, State#state.host, <<"">>),
+    ejabberd_local:route_iq(From, JID, IQ, F, State#state.ping_ack_timeout),
     Timers = add_timer(JID, State#state.ping_interval,
 		       State#state.timers),
     {noreply, State#state{timers = Timers}};
@@ -213,14 +219,15 @@ user_online(_SID, JID, _Info) ->
 user_offline(_SID, JID, _Info) ->
     stop_ping(JID#jid.lserver, JID).
 
-user_send(JID, _From, _Packet) ->
-    start_ping(JID#jid.lserver, JID).
+user_send(Packet, _C2SState, JID, _From) ->
+    start_ping(JID#jid.lserver, JID),
+    Packet.
 
 %%====================================================================
 %% Internal functions
 %%====================================================================
 add_timer(JID, Interval, Timers) ->
-    LJID = jlib:jid_tolower(JID),
+    LJID = jid:tolower(JID),
     NewTimers = case (?DICT):find(LJID, Timers) of
 		  {ok, OldTRef} ->
 		      cancel_timer(OldTRef), (?DICT):erase(LJID, Timers);
@@ -231,7 +238,7 @@ add_timer(JID, Interval, Timers) ->
     (?DICT):store(LJID, TRef, NewTimers).
 
 del_timer(JID, Timers) ->
-    LJID = jlib:jid_tolower(JID),
+    LJID = jid:tolower(JID),
     case (?DICT):find(LJID, Timers) of
       {ok, TRef} ->
 	  cancel_timer(TRef), (?DICT):erase(LJID, Timers);
@@ -244,3 +251,17 @@ cancel_timer(TRef) ->
 	  receive {timeout, TRef, _} -> ok after 0 -> ok end;
       _ -> ok
     end.
+
+mod_opt_type(iqdisc) -> fun gen_iq_handler:check_type/1;
+mod_opt_type(ping_interval) ->
+    fun (I) when is_integer(I), I > 0 -> I end;
+mod_opt_type(ping_ack_timeout) ->
+    fun (I) when is_integer(I), I > 0 -> I end;
+mod_opt_type(send_pings) ->
+    fun (B) when is_boolean(B) -> B end;
+mod_opt_type(timeout_action) ->
+    fun (none) -> none;
+	(kill) -> kill
+    end;
+mod_opt_type(_) ->
+    [iqdisc, ping_interval, ping_ack_timeout, send_pings, timeout_action].

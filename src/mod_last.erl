@@ -5,7 +5,7 @@
 %%% Created : 24 Oct 2003 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -25,14 +25,19 @@
 
 -module(mod_last).
 
+-behaviour(ejabberd_config).
+
 -author('alexey@process-one.net').
+
+-protocol({xep, 12, '2.0'}).
 
 -behaviour(gen_mod).
 
 -export([start/2, stop/1, process_local_iq/3, export/1,
-	 process_sm_iq/3, on_presence_update/4, import/1, import/3,
-	 store_last_info/4, get_last_info/2, remove_user/2,
-         transform_options/1]).
+	 process_sm_iq/3, on_presence_update/4, import/1,
+	 import/3, store_last_info/4, get_last_info/2,
+	 remove_user/2, transform_options/1, mod_opt_type/1,
+	 opt_type/1]).
 
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -107,7 +112,7 @@ get_node_uptime() ->
         undefined ->
             trunc(element(1, erlang:statistics(wall_clock)) / 1000);
         Now ->
-            now_to_seconds(now()) - Now
+            p1_time_compat:system_time(seconds) - Now
     end.
 
 now_to_seconds({MegaSecs, Secs, _MicroSecs}) ->
@@ -180,18 +185,12 @@ get_last(LUser, LServer, riak) ->
             Err
     end;
 get_last(LUser, LServer, odbc) ->
-    Username = ejabberd_odbc:escape(LUser),
-    case catch odbc_queries:get_last(LServer, Username) of
-      {selected, [<<"seconds">>, <<"state">>], []} ->
-	  not_found;
-      {selected, [<<"seconds">>, <<"state">>],
-       [[STimeStamp, Status]]} ->
-	  case catch jlib:binary_to_integer(STimeStamp) of
-	    TimeStamp when is_integer(TimeStamp) ->
-		{ok, TimeStamp, Status};
-	    Reason -> {error, {invalid_timestamp, Reason}}
-	  end;
-      Reason -> {error, {invalid_result, Reason}}
+    case catch odbc_queries:get_last(LServer, LUser) of
+        {selected, []} ->
+            not_found;
+        {selected, [{TimeStamp, Status}]} ->
+            {ok, TimeStamp, Status};
+        Reason -> {error, {invalid_result, Reason}}
     end.
 
 get_last_iq(IQ, SubEl, LUser, LServer) ->
@@ -205,7 +204,7 @@ get_last_iq(IQ, SubEl, LUser, LServer) ->
 		IQ#iq{type = error,
 		      sub_el = [SubEl, ?ERR_SERVICE_UNAVAILABLE]};
 	    {ok, TimeStamp, Status} ->
-		TimeStamp2 = now_to_seconds(now()),
+		TimeStamp2 = p1_time_compat:system_time(seconds),
 		Sec = TimeStamp2 - TimeStamp,
 		IQ#iq{type = result,
 		      sub_el =
@@ -227,12 +226,12 @@ get_last_iq(IQ, SubEl, LUser, LServer) ->
     end.
 
 on_presence_update(User, Server, _Resource, Status) ->
-    TimeStamp = now_to_seconds(now()),
+    TimeStamp = p1_time_compat:system_time(seconds),
     store_last_info(User, Server, TimeStamp, Status).
 
 store_last_info(User, Server, TimeStamp, Status) ->
-    LUser = jlib:nodeprep(User),
-    LServer = jlib:nameprep(Server),
+    LUser = jid:nodeprep(User),
+    LServer = jid:nameprep(Server),
     DBType = gen_mod:db_type(LServer, ?MODULE),
     store_last_info(LUser, LServer, TimeStamp, Status,
 		    DBType).
@@ -255,12 +254,7 @@ store_last_info(LUser, LServer, TimeStamp, Status,
 			       last_activity_schema())};
 store_last_info(LUser, LServer, TimeStamp, Status,
 		odbc) ->
-    Username = ejabberd_odbc:escape(LUser),
-    Seconds =
-	ejabberd_odbc:escape(iolist_to_binary(integer_to_list(TimeStamp))),
-    State = ejabberd_odbc:escape(Status),
-    odbc_queries:set_last_t(LServer, Username, Seconds,
-			    State).
+    odbc_queries:set_last_t(LServer, LUser, TimeStamp, Status).
 
 %% @spec (LUser::string(), LServer::string()) ->
 %%      {ok, TimeStamp::integer(), Status::string()} | not_found
@@ -271,8 +265,8 @@ get_last_info(LUser, LServer) ->
     end.
 
 remove_user(User, Server) ->
-    LUser = jlib:nodeprep(User),
-    LServer = jlib:nameprep(Server),
+    LUser = jid:nodeprep(User),
+    LServer = jid:nameprep(Server),
     DBType = gen_mod:db_type(LServer, ?MODULE),
     remove_user(LUser, LServer, DBType).
 
@@ -281,8 +275,7 @@ remove_user(LUser, LServer, mnesia) ->
     F = fun () -> mnesia:delete({last_activity, US}) end,
     mnesia:transaction(F);
 remove_user(LUser, LServer, odbc) ->
-    Username = ejabberd_odbc:escape(LUser),
-    odbc_queries:del_last(LServer, Username);
+    odbc_queries:del_last(LServer, LUser);
 remove_user(LUser, LServer, riak) ->
     {atomic, ejabberd_riak:delete(last_activity, {LUser, LServer})}.
 
@@ -349,3 +342,11 @@ transform_options({node_start, {_, _, _} = Now}, Opts) ->
     [{node_start, now_to_seconds(Now)}|Opts];
 transform_options(Opt, Opts) ->
     [Opt|Opts].
+
+mod_opt_type(db_type) -> fun gen_mod:v_db/1;
+mod_opt_type(iqdisc) -> fun gen_iq_handler:check_type/1;
+mod_opt_type(_) -> [db_type, iqdisc].
+
+opt_type(node_start) ->
+    fun (S) when is_integer(S), S >= 0 -> S end;
+opt_type(_) -> [node_start].

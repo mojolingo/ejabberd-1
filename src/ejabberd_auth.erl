@@ -5,7 +5,7 @@
 %%% Created : 23 Nov 2002 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -27,12 +27,14 @@
 
 -module(ejabberd_auth).
 
+-behaviour(ejabberd_config).
+
 -author('alexey@process-one.net').
 
 %% External exports
--export([start/0, set_password/3, check_password/3,
-	 check_password/5, check_password_with_authmodule/3,
-	 check_password_with_authmodule/5, try_register/3,
+-export([start/0, set_password/3, check_password/4,
+	 check_password/6, check_password_with_authmodule/4,
+	 check_password_with_authmodule/6, try_register/3,
 	 dirty_get_registered_users/0, get_vh_registered_users/1,
 	 get_vh_registered_users/2, export/1, import/1,
 	 get_vh_registered_users_number/1, import/3,
@@ -42,7 +44,7 @@
 	 remove_user/2, remove_user/3, plain_password_required/1,
 	 store_type/1, entropy/1]).
 
--export([auth_modules/1]).
+-export([auth_modules/1, opt_type/1]).
 
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -61,8 +63,8 @@
 -callback remove_user(binary(), binary()) -> any().
 -callback remove_user(binary(), binary(), binary()) -> any().
 -callback is_user_exists(binary(), binary()) -> boolean() | {error, atom()}.
--callback check_password(binary(), binary(), binary()) -> boolean().
--callback check_password(binary(), binary(), binary(), binary(),
+-callback check_password(binary(), binary(), binary(), binary()) -> boolean().
+-callback check_password(binary(), binary(), binary(), binary(), binary(),
                          fun((binary()) -> binary())) -> boolean().
 -callback try_register(binary(), binary(), binary()) -> {atomic, atom()} |
                                                         {error, atom()}.
@@ -72,10 +74,10 @@
 -callback get_vh_registered_users_number(binary()) -> number().
 -callback get_vh_registered_users_number(binary(), opts()) -> number().
 -callback get_password(binary(), binary()) -> false | binary() | {binary(), binary(), binary(), integer()}.
--callback get_password_s(binary(), binary()) -> binary().    
+-callback get_password_s(binary(), binary()) -> binary() | {binary(), binary(), binary(), integer()}.
 
 start() ->
-%% This is only executed by ejabberd_c2s for non-SASL auth client
+    %% This is only executed by ejabberd_c2s for non-SASL auth client
     lists:foreach(fun (Host) ->
 			  lists:foreach(fun (M) -> M:start(Host) end,
 					auth_modules(Host))
@@ -100,10 +102,10 @@ store_type(Server) ->
 		end,
 		plain, auth_modules(Server)).
 
--spec check_password(binary(), binary(), binary()) -> boolean().
+-spec check_password(binary(), binary(), binary(), binary()) -> boolean().
 
-check_password(User, Server, Password) ->
-    case check_password_with_authmodule(User, Server,
+check_password(User, AuthzId, Server, Password) ->
+    case check_password_with_authmodule(User, AuthzId, Server,
 					Password)
 	of
       {true, _AuthModule} -> true;
@@ -111,15 +113,15 @@ check_password(User, Server, Password) ->
     end.
 
 %% @doc Check if the user and password can login in server.
-%% @spec (User::string(), Server::string(), Password::string(),
+%% @spec (User::string(), AuthzId::string(), Server::string(), Password::string(),
 %%        Digest::string(), DigestGen::function()) ->
 %%     true | false
--spec check_password(binary(), binary(), binary(), binary(),
+-spec check_password(binary(), binary(), binary(), binary(), binary(),
                      fun((binary()) -> binary())) -> boolean().
                                  
-check_password(User, Server, Password, Digest,
+check_password(User, AuthzId, Server, Password, Digest,
 	       DigestGen) ->
-    case check_password_with_authmodule(User, Server,
+    case check_password_with_authmodule(User, AuthzId, Server,
 					Password, Digest, DigestGen)
 	of
       {true, _AuthModule} -> true;
@@ -130,28 +132,28 @@ check_password(User, Server, Password, Digest,
 %% The user can login if at least an authentication method accepts the user
 %% and the password.
 %% The first authentication method that accepts the credentials is returned.
-%% @spec (User::string(), Server::string(), Password::string()) ->
+%% @spec (User::string(), AuthzId::string(), Server::string(), Password::string()) ->
 %%     {true, AuthModule} | false
 %% where
 %%   AuthModule = ejabberd_auth_anonymous | ejabberd_auth_external
-%%                 | ejabberd_auth_internal | ejabberd_auth_ldap
-%%                 | ejabberd_auth_odbc | ejabberd_auth_pam
--spec check_password_with_authmodule(binary(), binary(), binary()) -> false |
+%%                 | ejabberd_auth_internal | ejabberd_auth_ldap | ejabberd_auth_mojoauth
+%%                 | ejabberd_auth_odbc | ejabberd_auth_pam | ejabberd_auth_riak
+-spec check_password_with_authmodule(binary(), binary(), binary(), binary()) -> false |
                                                                       {true, atom()}.
 
-check_password_with_authmodule(User, Server,
+check_password_with_authmodule(User, AuthzId, Server,
 			       Password) ->
     check_password_loop(auth_modules(Server),
-			[User, Server, Password]).
+			[User, AuthzId, Server, Password]).
 
--spec check_password_with_authmodule(binary(), binary(), binary(), binary(),
+-spec check_password_with_authmodule(binary(), binary(), binary(), binary(), binary(),
                                      fun((binary()) -> binary())) -> false |
                                                                      {true, atom()}.
 
-check_password_with_authmodule(User, Server, Password,
+check_password_with_authmodule(User, AuthzId, Server, Password,
 			       Digest, DigestGen) ->
     check_password_loop(auth_modules(Server),
-			[User, Server, Password, Digest, DigestGen]).
+			[User, AuthzId, Server, Password, Digest, DigestGen]).
 
 check_password_loop([], _Args) -> false;
 check_password_loop([AuthModule | AuthModules], Args) ->
@@ -185,7 +187,8 @@ try_register(User, Server, Password) ->
     case is_user_exists(User, Server) of
       true -> {atomic, exists};
       false ->
-	  case lists:member(jlib:nameprep(Server), ?MYHOSTS) of
+	  LServer = jid:nameprep(Server),
+	  case lists:member(LServer, ?MYHOSTS) of
 	    true ->
 		Res = lists:foldl(fun (_M, {atomic, ok} = Res) -> Res;
 				      (M, _) ->
@@ -276,7 +279,7 @@ get_password(User, Server) ->
 		end,
 		false, auth_modules(Server)).
 
--spec get_password_s(binary(), binary()) -> binary().
+-spec get_password_s(binary(), binary()) -> binary() | {binary(), binary(), binary(), integer()}.
 
 get_password_s(User, Server) ->
     case get_password(User, Server) of
@@ -355,7 +358,7 @@ remove_user(User, Server) ->
     lists:foreach(fun (M) -> M:remove_user(User, Server)
 		  end,
 		  auth_modules(Server)),
-    ejabberd_hooks:run(remove_user, jlib:nameprep(Server),
+    ejabberd_hooks:run(remove_user, jid:nameprep(Server),
 		       [User, Server]),
     ok.
 
@@ -373,7 +376,7 @@ remove_user(User, Server, Password) ->
 		    error, auth_modules(Server)),
     case R of
       ok ->
-	  ejabberd_hooks:run(remove_user, jlib:nameprep(Server),
+	  ejabberd_hooks:run(remove_user, jid:nameprep(Server),
 			     [User, Server]);
       _ -> none
     end,
@@ -424,7 +427,7 @@ auth_modules() ->
 
 %% Return the list of authenticated modules for a given host
 auth_modules(Server) ->
-    LServer = jlib:nameprep(Server),
+    LServer = jid:nameprep(Server),
     Default = case gen_mod:default_db(LServer) of
 		  mnesia -> internal;
 		  DBType -> DBType
@@ -453,3 +456,10 @@ import(Server, riak, Passwd) ->
     ejabberd_auth_riak:import(Server, riak, Passwd);
 import(_, _, _) ->
     pass.
+
+opt_type(auth_method) ->
+    fun (V) when is_list(V) ->
+	    true = lists:all(fun is_atom/1, V), V;
+	(V) when is_atom(V) -> [V]
+    end;
+opt_type(_) -> [auth_method].

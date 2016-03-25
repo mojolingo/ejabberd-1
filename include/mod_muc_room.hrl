@@ -1,6 +1,6 @@
 %%%----------------------------------------------------------------------
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -56,12 +56,15 @@
     password_protected                   = false :: boolean(),
     password                             = <<"">> :: binary(),
     anonymous                            = true :: boolean(),
+    presence_broadcast                   = [moderator, participant, visitor] ::
+          [moderator | participant | visitor],
     allow_voice_requests                 = true :: boolean(),
     voice_request_min_interval           = 1800 :: non_neg_integer(),
     max_users                            = ?MAX_USERS_DEFAULT :: non_neg_integer() | none,
     logging                              = false :: boolean(),
     vcard                                = <<"">> :: binary(),
-    captcha_whitelist                    = (?SETS):empty() :: ?TGB_SET
+    captcha_whitelist                    = (?SETS):empty() :: ?TGB_SET,
+    mam                                  = false :: boolean()
 }).
 
 -type config() :: #config{}.
@@ -110,8 +113,8 @@
 
 -record(muc_online_users, {us = {<<>>, <<>>} :: {binary(), binary()},
                            resource = <<>> :: binary() | '_',
-                           room = <<>> :: binary() | '_',
-                           host = <<>> :: binary() | '_'}).
+                           room = <<>> :: binary() | '_' | '$1',
+                           host = <<>> :: binary() | '_' | '$2'}).
 
 -type muc_online_users() :: #muc_online_users{}.
 

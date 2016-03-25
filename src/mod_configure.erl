@@ -5,7 +5,7 @@
 %%% Created : 19 Jan 2003 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -23,12 +23,11 @@
 %%%
 %%%----------------------------------------------------------------------
 
-%%% Implements most of XEP-0133: Service Administration Version 1.1
-%%% (2005-08-19)
-
 -module(mod_configure).
 
 -author('alexey@process-one.net').
+
+-protocol({xep, 133, '1.1'}).
 
 -behaviour(gen_mod).
 
@@ -36,19 +35,16 @@
 	 get_local_features/5, get_local_items/5,
 	 adhoc_local_items/4, adhoc_local_commands/4,
 	 get_sm_identity/5, get_sm_features/5, get_sm_items/5,
-	 adhoc_sm_items/4, adhoc_sm_commands/4]).
+	 adhoc_sm_items/4, adhoc_sm_commands/4, mod_opt_type/1]).
 
 -include("ejabberd.hrl").
 -include("logger.hrl").
 
 -include("jlib.hrl").
-
+-include("ejabberd_sm.hrl").
 -include("adhoc.hrl").
 
 -define(T(Lang, Text), translate:translate(Lang, Text)).
-
-%% Copied from ejabberd_sm.erl
--record(session, {sid, usr, us, priority, info}).
 
 start(Host, _Opts) ->
     ejabberd_hooks:add(disco_local_items, Host, ?MODULE,
@@ -115,7 +111,7 @@ stop(Host) ->
 -define(NODEJID(To, Name, Node),
 	#xmlel{name = <<"item">>,
 	       attrs =
-		   [{<<"jid">>, jlib:jid_to_string(To)},
+		   [{<<"jid">>, jid:to_string(To)},
 		    {<<"name">>, ?T(Lang, Name)}, {<<"node">>, Node}],
 	       children = []}).
 
@@ -293,7 +289,7 @@ adhoc_sm_items(Acc, From, #jid{lserver = LServer} = To,
 		  end,
 	  Nodes = [#xmlel{name = <<"item">>,
 			  attrs =
-			      [{<<"jid">>, jlib:jid_to_string(To)},
+			      [{<<"jid">>, jid:to_string(To)},
 			       {<<"name">>, ?T(Lang, <<"Configuration">>)},
 			       {<<"node">>, <<"config">>}],
 			  children = []}],
@@ -354,7 +350,7 @@ adhoc_local_items(Acc, From,
 	  Nodes = recursively_get_local_items(PermLev, LServer,
 					      <<"">>, Server, Lang),
 	  Nodes1 = lists:filter(fun (N) ->
-					Nd = xml:get_tag_attr_s(<<"node">>, N),
+					Nd = fxml:get_tag_attr_s(<<"node">>, N),
 					F = get_local_features([], From, To, Nd,
 							       Lang),
 					case F of
@@ -383,9 +379,9 @@ recursively_get_local_items(PermLev, LServer, Node,
 	      {error, _Error} -> []
 	    end,
     Nodes = lists:flatten(lists:map(fun (N) ->
-					    S = xml:get_tag_attr_s(<<"jid">>,
+					    S = fxml:get_tag_attr_s(<<"jid">>,
 								   N),
-					    Nd = xml:get_tag_attr_s(<<"node">>,
+					    Nd = fxml:get_tag_attr_s(<<"node">>,
 								    N),
 					    if (S /= Server) or
 						 (Nd == <<"">>) ->
@@ -416,7 +412,7 @@ get_permission_level(JID) ->
 	  allow ->
 	      PermLev = get_permission_level(From),
 	      case get_local_items({PermLev, LServer}, LNode,
-				   jlib:jid_to_string(To), Lang)
+				   jid:to_string(To), Lang)
 		  of
 		{result, Res} -> {result, Res};
 		{error, Error} -> {error, Error}
@@ -438,7 +434,7 @@ get_local_items(Acc, From, #jid{lserver = LServer} = To,
 	    allow ->
 		PermLev = get_permission_level(From),
 		case get_local_items({PermLev, LServer}, [],
-				     jlib:jid_to_string(To), Lang)
+				     jid:to_string(To), Lang)
 		    of
 		  {result, Res} -> {result, Items ++ Res};
 		  {error, _Error} -> {result, Items}
@@ -986,7 +982,7 @@ get_form(_Host, [<<"running nodes">>, ENode, <<"DB">>],
     case search_running_node(ENode) of
       false -> {error, ?ERR_ITEM_NOT_FOUND};
       Node ->
-	  case rpc:call(Node, mnesia, system_info, [tables]) of
+	  case ejabberd_cluster:call(Node, mnesia, system_info, [tables]) of
 	    {badrpc, _Reason} ->
 		{error, ?ERR_INTERNAL_SERVER_ERROR};
 	    Tables ->
@@ -1008,7 +1004,7 @@ get_form(_Host, [<<"running nodes">>, ENode, <<"DB">>],
 					   ?T(Lang,
 					      <<"Choose storage type of tables">>)}]}
 			      | lists:map(fun (Table) ->
-						  case rpc:call(Node, mnesia,
+						  case ejabberd_cluster:call(Node, mnesia,
 								table_info,
 								[Table,
 								 storage_type])
@@ -1029,7 +1025,7 @@ get_form(Host,
     case search_running_node(ENode) of
       false -> {error, ?ERR_ITEM_NOT_FOUND};
       Node ->
-	  case rpc:call(Node, gen_mod, loaded_modules, [Host]) of
+	  case ejabberd_cluster:call(Node, gen_mod, loaded_modules, [Host]) of
 	    {badrpc, _Reason} ->
 		{error, ?ERR_INTERNAL_SERVER_ERROR};
 	    Modules ->
@@ -1608,7 +1604,7 @@ set_form(_From, Host,
 				case Vals of
 				  [<<"1">>] ->
 				      Module = jlib:binary_to_atom(Var),
-				      rpc:call(Node, gen_mod, stop_module,
+				      ejabberd_cluster:call(Node, gen_mod, stop_module,
 					       [Host, Module]);
 				  _ -> ok
 				end
@@ -1635,7 +1631,7 @@ set_form(_From, Host,
 		      case erl_parse:parse_term(Tokens) of
 			{ok, Modules} ->
 			    lists:foreach(fun ({Module, Args}) ->
-						  rpc:call(Node, gen_mod,
+						  ejabberd_cluster:call(Node, gen_mod,
 							   start_module,
 							   [Host, Module, Args])
 					  end,
@@ -1657,7 +1653,7 @@ set_form(_From, _Host,
 	  case lists:keysearch(<<"path">>, 1, XData) of
 	    false -> {error, ?ERR_BAD_REQUEST};
 	    {value, {_, [String]}} ->
-		case rpc:call(Node, mnesia, backup, [String]) of
+		case ejabberd_cluster:call(Node, mnesia, backup, [String]) of
 		  {badrpc, _Reason} ->
 		      {error, ?ERR_INTERNAL_SERVER_ERROR};
 		  {error, _Reason} -> {error, ?ERR_INTERNAL_SERVER_ERROR};
@@ -1676,7 +1672,7 @@ set_form(_From, _Host,
 	  case lists:keysearch(<<"path">>, 1, XData) of
 	    false -> {error, ?ERR_BAD_REQUEST};
 	    {value, {_, [String]}} ->
-		case rpc:call(Node, ejabberd_admin, restore, [String])
+		case ejabberd_cluster:call(Node, ejabberd_admin, restore, [String])
 		    of
 		  {badrpc, _Reason} ->
 		      {error, ?ERR_INTERNAL_SERVER_ERROR};
@@ -1696,7 +1692,7 @@ set_form(_From, _Host,
 	  case lists:keysearch(<<"path">>, 1, XData) of
 	    false -> {error, ?ERR_BAD_REQUEST};
 	    {value, {_, [String]}} ->
-		case rpc:call(Node, ejabberd_admin, dump_to_textfile,
+		case ejabberd_cluster:call(Node, ejabberd_admin, dump_to_textfile,
 			      [String])
 		    of
 		  {badrpc, _Reason} ->
@@ -1716,7 +1712,7 @@ set_form(_From, _Host,
 	  case lists:keysearch(<<"path">>, 1, XData) of
 	    false -> {error, ?ERR_BAD_REQUEST};
 	    {value, {_, [String]}} ->
-		rpc:call(Node, jd2ejd, import_file, [String]),
+		ejabberd_cluster:call(Node, jd2ejd, import_file, [String]),
 		{result, []};
 	    _ -> {error, ?ERR_BAD_REQUEST}
 	  end
@@ -1730,7 +1726,7 @@ set_form(_From, _Host,
 	  case lists:keysearch(<<"path">>, 1, XData) of
 	    false -> {error, ?ERR_BAD_REQUEST};
 	    {value, {_, [String]}} ->
-		rpc:call(Node, jd2ejd, import_dir, [String]),
+		ejabberd_cluster:call(Node, jd2ejd, import_dir, [String]),
 		{result, []};
 	    _ -> {error, ?ERR_BAD_REQUEST}
 	  end
@@ -1818,7 +1814,7 @@ set_form(From, Host, ?NS_ADMINL(<<"add-user">>), _Lang,
     AccountString = get_value(<<"accountjid">>, XData),
     Password = get_value(<<"password">>, XData),
     Password = get_value(<<"password-verify">>, XData),
-    AccountJID = jlib:string_to_jid(AccountString),
+    AccountJID = jid:from_string(AccountString),
     User = AccountJID#jid.luser,
     Server = AccountJID#jid.lserver,
     true = lists:member(Server, ?MYHOSTS),
@@ -1832,7 +1828,7 @@ set_form(From, Host, ?NS_ADMINL(<<"delete-user">>),
 				   XData),
     [_ | _] = AccountStringList,
     ASL2 = lists:map(fun (AccountString) ->
-			     JID = jlib:string_to_jid(AccountString),
+			     JID = jid:from_string(AccountString),
 			     User = JID#jid.luser,
 			     Server = JID#jid.lserver,
 			     true = Server == Host orelse
@@ -1847,7 +1843,7 @@ set_form(From, Host, ?NS_ADMINL(<<"delete-user">>),
 set_form(From, Host, ?NS_ADMINL(<<"end-user-session">>),
 	 Lang, XData) ->
     AccountString = get_value(<<"accountjid">>, XData),
-    JID = jlib:string_to_jid(AccountString),
+    JID = jid:from_string(AccountString),
     LUser = JID#jid.luser,
     LServer = JID#jid.lserver,
     true = LServer == Host orelse
@@ -1873,7 +1869,7 @@ set_form(From, Host, ?NS_ADMINL(<<"end-user-session">>),
 set_form(From, Host,
 	 ?NS_ADMINL(<<"get-user-password">>), Lang, XData) ->
     AccountString = get_value(<<"accountjid">>, XData),
-    JID = jlib:string_to_jid(AccountString),
+    JID = jid:from_string(AccountString),
     User = JID#jid.luser,
     Server = JID#jid.lserver,
     true = Server == Host orelse
@@ -1893,7 +1889,7 @@ set_form(From, Host,
 	 ?NS_ADMINL(<<"change-user-password">>), _Lang, XData) ->
     AccountString = get_value(<<"accountjid">>, XData),
     Password = get_value(<<"password">>, XData),
-    JID = jlib:string_to_jid(AccountString),
+    JID = jid:from_string(AccountString),
     User = JID#jid.luser,
     Server = JID#jid.lserver,
     true = Server == Host orelse
@@ -1904,7 +1900,7 @@ set_form(From, Host,
 set_form(From, Host,
 	 ?NS_ADMINL(<<"get-user-lastlogin">>), Lang, XData) ->
     AccountString = get_value(<<"accountjid">>, XData),
-    JID = jlib:string_to_jid(AccountString),
+    JID = jid:from_string(AccountString),
     User = JID#jid.luser,
     Server = JID#jid.lserver,
     true = Server == Host orelse
@@ -1913,7 +1909,6 @@ set_form(From, Host,
 						Server)
 		of
 	      [] ->
-		  _US = {User, Server},
 		  case get_last_info(User, Server) of
 		    not_found -> ?T(Lang, <<"Never">>);
 		    {ok, Timestamp, _Status} ->
@@ -1940,7 +1935,7 @@ set_form(From, Host,
 set_form(From, Host, ?NS_ADMINL(<<"user-stats">>), Lang,
 	 XData) ->
     AccountString = get_value(<<"accountjid">>, XData),
-    JID = jlib:string_to_jid(AccountString),
+    JID = jid:from_string(AccountString),
     User = JID#jid.luser,
     Server = JID#jid.lserver,
     true = Server == Host orelse
@@ -2023,17 +2018,17 @@ stop_node(From, Host, ENode, Action, XData) ->
 				       #xmlel{name = <<"x">>,
 					      attrs =
 						  [{<<"xmlns">>,
-						    <<"jabber:x:data">>},
+						    ?NS_XDATA},
 						   {<<"type">>, <<"submit">>}],
 					      children = SubEls},
 				   others =
 				       [#xmlel{name = <<"x">>,
 					       attrs =
 						   [{<<"xmlns">>,
-						     <<"jabber:x:data">>},
+						     ?NS_XDATA},
 						    {<<"type">>, <<"submit">>}],
 					       children = SubEls}]},
-	  To = jlib:make_jid(<<"">>, Host, <<"">>),
+	  To = jid:make(<<"">>, Host, <<"">>),
 	  mod_announce:announce_commands(empty, From, To, Request)
     end,
     Time = timer:seconds(Delay),
@@ -2149,3 +2144,5 @@ set_sm_form(User, Server, <<"config">>,
     end;
 set_sm_form(_User, _Server, _Node, _Request, _Fields) ->
     {error, ?ERR_SERVICE_UNAVAILABLE}.
+
+mod_opt_type(_) -> [].

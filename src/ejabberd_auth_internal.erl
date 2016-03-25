@@ -5,7 +5,7 @@
 %%% Created : 12 Dec 2004 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -25,20 +25,21 @@
 
 -module(ejabberd_auth_internal).
 
+-behaviour(ejabberd_config).
+
 -author('alexey@process-one.net').
 
 -behaviour(ejabberd_auth).
 
-%% External exports
--export([start/1, set_password/3, check_password/3,
-	 check_password/5, try_register/3,
+-export([start/1, set_password/3, check_password/4,
+	 check_password/6, try_register/3,
 	 dirty_get_registered_users/0, get_vh_registered_users/1,
 	 get_vh_registered_users/2,
 	 get_vh_registered_users_number/1,
 	 get_vh_registered_users_number/2, get_password/2,
 	 get_password_s/2, is_user_exists/2, remove_user/2,
 	 remove_user/3, store_type/0, export/1, import/1,
-	 import/3, plain_password_required/0]).
+	 import/3, plain_password_required/0, opt_type/1]).
 
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -69,7 +70,7 @@ start(Host) ->
 update_reg_users_counter_table(Server) ->
     Set = get_vh_registered_users(Server),
     Size = length(Set),
-    LServer = jlib:nameprep(Server),
+    LServer = jid:nameprep(Server),
     F = fun () ->
 		mnesia:write(#reg_users_counter{vhost = LServer,
 						count = Size})
@@ -85,9 +86,12 @@ store_type() ->
       true -> scram %% allows: PLAIN SCRAM
     end.
 
-check_password(User, Server, Password) ->
-    LUser = jlib:nodeprep(User),
-    LServer = jlib:nameprep(Server),
+check_password(User, AuthzId, Server, Password) ->
+    if AuthzId /= <<>> andalso AuthzId /= User ->
+        false;
+    true ->
+        LUser = jid:nodeprep(User),
+        LServer = jid:nameprep(Server),
     US = {LUser, LServer},
     case catch mnesia:dirty_read({passwd, US}) of
       [#passwd{password = Password}]
@@ -97,12 +101,16 @@ check_password(User, Server, Password) ->
 	  when is_record(Scram, scram) ->
 	  is_password_scram_valid(Password, Scram);
       _ -> false
+        end
     end.
 
-check_password(User, Server, Password, Digest,
+check_password(User, AuthzId, Server, Password, Digest,
 	       DigestGen) ->
-    LUser = jlib:nodeprep(User),
-    LServer = jlib:nameprep(Server),
+    if AuthzId /= <<>> andalso AuthzId /= User ->
+        false;
+    true ->
+        LUser = jid:nodeprep(User),
+        LServer = jid:nameprep(Server),
     US = {LUser, LServer},
     case catch mnesia:dirty_read({passwd, US}) of
       [#passwd{password = Passwd}] when is_binary(Passwd) ->
@@ -124,13 +132,14 @@ check_password(User, Server, Password, Digest,
 	     true -> (Passwd == Password) and (Password /= <<"">>)
 	  end;
       _ -> false
+        end
     end.
 
 %% @spec (User::string(), Server::string(), Password::string()) ->
 %%       ok | {error, invalid_jid}
 set_password(User, Server, Password) ->
-    LUser = jlib:nodeprep(User),
-    LServer = jlib:nameprep(Server),
+    LUser = jid:nodeprep(User),
+    LServer = jid:nameprep(Server),
     US = {LUser, LServer},
     if (LUser == error) or (LServer == error) ->
 	   {error, invalid_jid};
@@ -149,9 +158,12 @@ set_password(User, Server, Password) ->
 
 %% @spec (User, Server, Password) -> {atomic, ok} | {atomic, exists} | {error, invalid_jid} | {error, not_allowed} | {error, Reason}
 try_register(User, Server, PasswordList) ->
-    LUser = jlib:nodeprep(User),
-    LServer = jlib:nameprep(Server),
-    Password = iolist_to_binary(PasswordList),
+    LUser = jid:nodeprep(User),
+    LServer = jid:nameprep(Server),
+    Password = if is_list(PasswordList); is_binary(PasswordList) ->
+      iolist_to_binary(PasswordList);
+      true -> PasswordList
+    end,
     US = {LUser, LServer},
     if (LUser == error) or (LServer == error) ->
 	   {error, invalid_jid};
@@ -181,7 +193,7 @@ dirty_get_registered_users() ->
     mnesia:dirty_all_keys(passwd).
 
 get_vh_registered_users(Server) ->
-    LServer = jlib:nameprep(Server),
+    LServer = jid:nameprep(Server),
     mnesia:dirty_select(passwd,
 			[{#passwd{us = '$1', _ = '_'},
 			  [{'==', {element, 2, '$1'}, LServer}], ['$1']}]).
@@ -240,7 +252,7 @@ get_vh_registered_users(Server, _) ->
     get_vh_registered_users(Server).
 
 get_vh_registered_users_number(Server) ->
-    LServer = jlib:nameprep(Server),
+    LServer = jid:nameprep(Server),
     Query = mnesia:dirty_select(reg_users_counter,
 				[{#reg_users_counter{vhost = LServer,
 						     count = '$1'},
@@ -261,8 +273,8 @@ get_vh_registered_users_number(Server, _) ->
     get_vh_registered_users_number(Server).
 
 get_password(User, Server) ->
-    LUser = jlib:nodeprep(User),
-    LServer = jlib:nameprep(Server),
+    LUser = jid:nodeprep(User),
+    LServer = jid:nameprep(Server),
     US = {LUser, LServer},
     case catch mnesia:dirty_read(passwd, US) of
       [#passwd{password = Password}]
@@ -278,8 +290,8 @@ get_password(User, Server) ->
     end.
 
 get_password_s(User, Server) ->
-    LUser = jlib:nodeprep(User),
-    LServer = jlib:nameprep(Server),
+    LUser = jid:nodeprep(User),
+    LServer = jid:nameprep(Server),
     US = {LUser, LServer},
     case catch mnesia:dirty_read(passwd, US) of
       [#passwd{password = Password}]
@@ -293,8 +305,8 @@ get_password_s(User, Server) ->
 
 %% @spec (User, Server) -> true | false | {error, Error}
 is_user_exists(User, Server) ->
-    LUser = jlib:nodeprep(User),
-    LServer = jlib:nameprep(Server),
+    LUser = jid:nodeprep(User),
+    LServer = jid:nameprep(Server),
     US = {LUser, LServer},
     case catch mnesia:dirty_read({passwd, US}) of
       [] -> false;
@@ -306,8 +318,8 @@ is_user_exists(User, Server) ->
 %% @doc Remove user.
 %% Note: it returns ok even if there was some problem removing the user.
 remove_user(User, Server) ->
-    LUser = jlib:nodeprep(User),
-    LServer = jlib:nameprep(Server),
+    LUser = jid:nodeprep(User),
+    LServer = jid:nameprep(Server),
     US = {LUser, LServer},
     F = fun () ->
 		mnesia:delete({passwd, US}),
@@ -320,8 +332,8 @@ remove_user(User, Server) ->
 %% @spec (User, Server, Password) -> ok | not_exists | not_allowed | bad_request
 %% @doc Remove user if the provided password is correct.
 remove_user(User, Server, Password) ->
-    LUser = jlib:nodeprep(User),
-    LServer = jlib:nameprep(Server),
+    LUser = jid:nodeprep(User),
+    LServer = jid:nameprep(Server),
     US = {LUser, LServer},
     F = fun () ->
 		case mnesia:read({passwd, US}) of
@@ -481,3 +493,6 @@ import(_LServer, mnesia, #passwd{} = P) ->
     mnesia:dirty_write(P);
 import(_, _, _) ->
     pass.
+
+opt_type(auth_password_format) -> fun (V) -> V end;
+opt_type(_) -> [auth_password_format].

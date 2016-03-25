@@ -3,44 +3,71 @@ defmodule Ejabberd.Mixfile do
 
   def project do
     [app: :ejabberd,
-     version: "15.03.0",
-     elixir: "~> 1.0",
+     version: "16.02.0",
+     description: description,
+     elixir: "~> 1.2",
      elixirc_paths: ["lib"],
      compile_path: ".",
      compilers: [:asn1] ++ Mix.compilers,
      erlc_options: erlc_options,
      erlc_paths: ["asn1", "src"],
+     package: package,
      deps: deps]
+  end
+
+  defp description do
+    """
+    Robust, ubiquitous and massively scalable Jabber / XMPP Instant Messaging platform.
+    """
   end
 
   def application do
     [mod: {:ejabberd_app, []},
-     applications: [:kernel, :stdlib]]
+     applications: [:ssl],
+     included_applications: [:lager, :mnesia, :p1_utils, :cache_tab,
+                             :fast_tls, :stringprep, :fast_xml,
+                             :stun, :fast_yaml, :ezlib, :iconv,
+                             :esip, :jiffy, :p1_oauth2, :p1_xmlrpc, :eredis,
+                             :p1_mysql, :p1_pgsql, :sqlite3]]
   end
-  
+
   defp erlc_options do
-    includes = Path.wildcard(Path.join("..", "/*/include"))
-    [:debug_info, {:d, :NO_EXT_LIB}] ++ Enum.map(includes, fn(path) -> {:i, path} end)
+    # Use our own includes + includes from all dependencies
+    includes = ["include"] ++ Path.wildcard(Path.join("..", "/*/include"))
+    [:debug_info] ++ Enum.map(includes, fn(path) -> {:i, path} end)
   end
-  
+
   defp deps do
-    [
-        {:p1_xml, github: "processone/xml"},
-        {:p1_logger, github: "processone/p1_logger"},
-        {:p1_yaml, github: "processone/p1_yaml"},
-        {:p1_tls, github: "processone/tls"},
-        {:p1_stringprep, github: "processone/stringprep"},
-        {:p1_zlib, github: "processone/zlib"},
-        {:p1_cache_tab, github: "processone/cache_tab"},
-        {:p1_utils, github: "processone/p1_utils"},
-        {:p1_iconv, github: "processone/eiconv"},
-        {:esip, github: "processone/p1_sip"},
-        {:p1_stun, github: "processone/stun"},
-        {:ehyperloglog, github: "vaxelfel/eHyperLogLog"},
-        {:p1_mysql, github: "processone/mysql"},
-        {:p1_pgsql, github: "processone/pgsql"},
-        {:eredis, github: "wooga/eredis"}
-     ]
+    [{:lager, "~> 3.0"},
+     {:p1_utils, "~> 1.0"},
+     {:cache_tab, "~> 1.0"},
+     {:stringprep, "~> 1.0"},
+     {:fast_yaml, "~> 1.0"},
+     {:fast_tls, "~> 1.0"},
+     {:fast_xml, "~> 1.1"},
+     {:stun, "~> 1.0"},
+     {:esip, "~> 1.0"},
+     {:jiffy, "~> 0.14.7"},
+     {:p1_oauth2, "~> 0.6.1"},
+     {:p1_xmlrpc, "~> 1.15"},
+     {:p1_mysql, "~> 1.0"},
+     {:p1_pgsql, "~> 1.0"},
+     {:sqlite3, "~> 1.1"},
+     {:ezlib, "~> 1.0"},
+     {:iconv, "~> 1.0"},
+     {:eredis, "~> 1.0"},
+     {:exrm, "~> 1.0.0-rc7", only: :dev}]
+  end
+
+  defp package do
+    [# These are the default files included in the package
+      files: ["lib", "src", "priv", "mix.exs", "include", "README.md", "COPYING"],
+      maintainers: ["ProcessOne"],
+      licenses: ["GPLv2"],
+      links: %{"Site" => "https://www.ejabberd.im",
+               "Documentation" => "http://docs.ejabberd.im",
+               "Source" => "https://github.com/processone/ejabberd",
+               "ProcessOne" => "http://www.process-one.net/"}]
   end
 end
 
@@ -65,7 +92,7 @@ defmodule Mix.Tasks.Compile.Asn1 do
         options = options ++ [:noobj, outdir: Erlang.to_erl_file(Path.dirname(output))]
         case :asn1ct.compile(Erlang.to_erl_file(input), options) do
           :ok -> {:ok, :done}
-          error -> error       
+          error -> error
         end
     end)
   end

@@ -5,7 +5,7 @@
 %%% Created : 7 Oct 2006 by Magnus Henoch <henoch@dtek.chalmers.se>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -29,6 +29,8 @@
 
 -author('henoch@dtek.chalmers.se').
 
+-protocol({xep, 115, '1.5'}).
+
 -behaviour(gen_server).
 
 -behaviour(gen_mod).
@@ -45,10 +47,9 @@
 -export([init/1, handle_info/2, handle_call/3,
 	 handle_cast/2, terminate/2, code_change/3]).
 
-%% hook handlers
--export([user_send_packet/3, user_receive_packet/4,
+-export([user_send_packet/4, user_receive_packet/5,
 	 c2s_presence_in/2, c2s_filter_packet/6,
-	 c2s_broadcast_recipients/6]).
+	 c2s_broadcast_recipients/6, mod_opt_type/1]).
 
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -119,12 +120,12 @@ read_caps(Els) -> read_caps(Els, nothing).
 read_caps([#xmlel{name = <<"c">>, attrs = Attrs}
 	   | Tail],
 	  Result) ->
-    case xml:get_attr_s(<<"xmlns">>, Attrs) of
+    case fxml:get_attr_s(<<"xmlns">>, Attrs) of
       ?NS_CAPS ->
-	  Node = xml:get_attr_s(<<"node">>, Attrs),
-	  Version = xml:get_attr_s(<<"ver">>, Attrs),
-	  Hash = xml:get_attr_s(<<"hash">>, Attrs),
-	  Exts = str:tokens(xml:get_attr_s(<<"ext">>, Attrs),
+	  Node = fxml:get_attr_s(<<"node">>, Attrs),
+	  Version = fxml:get_attr_s(<<"ver">>, Attrs),
+	  Hash = fxml:get_attr_s(<<"hash">>, Attrs),
+	  Exts = str:tokens(fxml:get_attr_s(<<"ext">>, Attrs),
 			    <<" ">>),
 	  read_caps(Tail,
 		    #caps{node = Node, hash = Hash, version = Version,
@@ -134,7 +135,7 @@ read_caps([#xmlel{name = <<"c">>, attrs = Attrs}
 read_caps([#xmlel{name = <<"x">>, attrs = Attrs}
 	   | Tail],
 	  Result) ->
-    case xml:get_attr_s(<<"xmlns">>, Attrs) of
+    case fxml:get_attr_s(<<"xmlns">>, Attrs) of
       ?NS_MUC_USER -> nothing;
       _ -> read_caps(Tail, Result)
     end;
@@ -142,12 +143,13 @@ read_caps([_ | Tail], Result) ->
     read_caps(Tail, Result);
 read_caps([], Result) -> Result.
 
-user_send_packet(#jid{luser = User, lserver = Server} = From,
+user_send_packet(#xmlel{name = <<"presence">>, attrs = Attrs,
+			children = Els} = Pkt,
+		 _C2SState,
+		 #jid{luser = User, lserver = Server} = From,
 		 #jid{luser = User, lserver = Server,
-		      lresource = <<"">>},
-		 #xmlel{name = <<"presence">>, attrs = Attrs,
-		       children = Els} = Pkt) ->
-    Type = xml:get_attr_s(<<"type">>, Attrs),
+		      lresource = <<"">>}) ->
+    Type = fxml:get_attr_s(<<"type">>, Attrs),
     if Type == <<"">>; Type == <<"available">> ->
 	   case read_caps(Els) of
 	     nothing -> ok;
@@ -157,14 +159,15 @@ user_send_packet(#jid{luser = User, lserver = Server} = From,
        true -> ok
     end,
     Pkt;
-user_send_packet( _From, _To, Pkt) ->
+user_send_packet(Pkt, _C2SState, _From, _To) ->
     Pkt.
 
-user_receive_packet(#jid{lserver = Server},
-		    From, _To,
-		    #xmlel{name = <<"presence">>, attrs = Attrs,
-			   children = Els} = Pkt) ->
-    Type = xml:get_attr_s(<<"type">>, Attrs),
+user_receive_packet(#xmlel{name = <<"presence">>, attrs = Attrs,
+			   children = Els} = Pkt,
+		    _C2SState,
+		    #jid{lserver = Server},
+		    From, _To) ->
+    Type = fxml:get_attr_s(<<"type">>, Attrs),
     IsRemote = not lists:member(From#jid.lserver, ?MYHOSTS),
     if IsRemote and
 	 ((Type == <<"">>) or (Type == <<"available">>)) ->
@@ -176,7 +179,7 @@ user_receive_packet(#jid{lserver = Server},
        true -> ok
     end,
     Pkt;
-user_receive_packet( _JID, _From, _To, Pkt) ->
+user_receive_packet(Pkt, _C2SState, _JID, _From, _To) ->
     Pkt.
 
 -spec caps_stream_features([xmlel()], binary()) -> [xmlel()].
@@ -224,7 +227,7 @@ disco_info(Acc, Host, Module, Node, Lang) ->
 
 c2s_presence_in(C2SState,
 		{From, To, {_, _, Attrs, Els}}) ->
-    Type = xml:get_attr_s(<<"type">>, Attrs),
+    Type = fxml:get_attr_s(<<"type">>, Attrs),
     Subscription = ejabberd_c2s:get_subscription(From,
 						 C2SState),
     Insert = ((Type == <<"">>) or (Type == <<"available">>))
@@ -232,7 +235,7 @@ c2s_presence_in(C2SState,
     Delete = (Type == <<"unavailable">>) or
 	       (Type == <<"error">>),
     if Insert or Delete ->
-	   LFrom = jlib:jid_tolower(From),
+	   LFrom = jid:tolower(From),
 	   Rs = case ejabberd_c2s:get_aux_field(caps_resources,
 						C2SState)
 		    of
@@ -240,27 +243,24 @@ c2s_presence_in(C2SState,
 		  error -> gb_trees:empty()
 		end,
 	   Caps = read_caps(Els),
-	   {CapsUpdated, NewRs} = case Caps of
-				    nothing when Insert == true -> {false, Rs};
-				    _ when Insert == true ->
-					case gb_trees:lookup(LFrom, Rs) of
-					  {value, Caps} -> {false, Rs};
-					  none ->
-					      {true,
-					       gb_trees:insert(LFrom, Caps,
-							       Rs)};
-					  _ ->
-					      {true,
-					       gb_trees:update(LFrom, Caps, Rs)}
-					end;
-				    _ -> {false, gb_trees:delete_any(LFrom, Rs)}
-				  end,
-	   if CapsUpdated ->
-		  ejabberd_hooks:run(caps_update, To#jid.lserver,
-				     [From, To,
-                                      get_features(To#jid.lserver, Caps)]);
-	      true -> ok
-	   end,
+	   NewRs = case Caps of
+		     nothing when Insert == true -> Rs;
+		     _ when Insert == true ->
+			 case gb_trees:lookup(LFrom, Rs) of
+			   {value, Caps} -> Rs;
+			   none ->
+				ejabberd_hooks:run(caps_add, To#jid.lserver,
+						   [From, To,
+						    get_features(To#jid.lserver, Caps)]),
+				gb_trees:insert(LFrom, Caps, Rs);
+			   _ ->
+				ejabberd_hooks:run(caps_update, To#jid.lserver,
+						   [From, To,
+						    get_features(To#jid.lserver, Caps)]),
+				gb_trees:update(LFrom, Caps, Rs)
+			 end;
+		     _ -> gb_trees:delete_any(LFrom, Rs)
+		   end,
 	   ejabberd_c2s:set_aux_field(caps_resources, NewRs,
 				      C2SState);
        true -> C2SState
@@ -269,7 +269,7 @@ c2s_presence_in(C2SState,
 c2s_filter_packet(InAcc, Host, C2SState, {pep_message, Feature}, To, _Packet) ->
     case ejabberd_c2s:get_aux_field(caps_resources, C2SState) of
       {ok, Rs} ->
-	  LTo = jlib:jid_tolower(To),
+	  LTo = jid:tolower(To),
 	  case gb_trees:lookup(LTo, Rs) of
 	    {value, Caps} ->
 		Drop = not lists:member(Feature, get_features(Host, Caps)),
@@ -417,7 +417,7 @@ feature_request(Host, From, Caps,
 			     feature_response(IQReply, Host, From, Caps,
 					      SubNodes)
 		     end,
-		 ejabberd_local:route_iq(jlib:make_jid(<<"">>, Host,
+		 ejabberd_local:route_iq(jid:make(<<"">>, Host,
 						       <<"">>),
 					 From, IQ, F);
 	     true -> feature_request(Host, From, Caps, Tail)
@@ -434,7 +434,7 @@ feature_response(#iq{type = result,
 	  Features = lists:flatmap(fun (#xmlel{name =
 						   <<"feature">>,
 					       attrs = FAttrs}) ->
-					   [xml:get_attr_s(<<"var">>, FAttrs)];
+					   [fxml:get_attr_s(<<"var">>, FAttrs)];
 				       (_) -> []
 				   end,
 				   Els),
@@ -449,7 +449,7 @@ feature_response(_IQResult, Host, From, Caps,
     feature_request(Host, From, Caps, SubNodes).
 
 caps_read_fun(Host, Node) ->
-    LServer = jlib:nameprep(Host),
+    LServer = jid:nameprep(Host),
     DBType = gen_mod:db_type(LServer, ?MODULE),
     caps_read_fun(LServer, Node, DBType).
 
@@ -488,7 +488,7 @@ caps_read_fun(LServer, {Node, SubNode}, odbc) ->
     end.
 
 caps_write_fun(Host, Node, Features) ->
-    LServer = jlib:nameprep(Host),
+    LServer = jid:nameprep(Host),
     DBType = gen_mod:db_type(LServer, ?MODULE),
     caps_write_fun(LServer, Node, Features, DBType).
 
@@ -511,7 +511,7 @@ caps_write_fun(LServer, NodePair, Features, odbc) ->
     end.
 
 make_my_disco_hash(Host) ->
-    JID = jlib:make_jid(<<"">>, Host, <<"">>),
+    JID = jid:make(<<"">>, Host, <<"">>),
     case {ejabberd_hooks:run_fold(disco_local_features,
 				  Host, empty, [JID, JID, <<"">>, <<"">>]),
 	  ejabberd_hooks:run_fold(disco_local_identity, Host, [],
@@ -567,7 +567,7 @@ concat_features(Els) ->
     lists:usort(lists:flatmap(fun (#xmlel{name =
 					      <<"feature">>,
 					  attrs = Attrs}) ->
-				      [[xml:get_attr_s(<<"var">>, Attrs), $<]];
+				      [[fxml:get_attr_s(<<"var">>, Attrs), $<]];
 				  (_) -> []
 			      end,
 			      Els)).
@@ -576,11 +576,11 @@ concat_identities(Els) ->
     lists:sort(lists:flatmap(fun (#xmlel{name =
 					     <<"identity">>,
 					 attrs = Attrs}) ->
-				     [[xml:get_attr_s(<<"category">>, Attrs),
-				       $/, xml:get_attr_s(<<"type">>, Attrs),
+				     [[fxml:get_attr_s(<<"category">>, Attrs),
+				       $/, fxml:get_attr_s(<<"type">>, Attrs),
 				       $/,
-				       xml:get_attr_s(<<"xml:lang">>, Attrs),
-				       $/, xml:get_attr_s(<<"name">>, Attrs),
+				       fxml:get_attr_s(<<"xml:lang">>, Attrs),
+				       $/, fxml:get_attr_s(<<"name">>, Attrs),
 				       $<]];
 				 (_) -> []
 			     end,
@@ -589,8 +589,8 @@ concat_identities(Els) ->
 concat_info(Els) ->
     lists:sort(lists:flatmap(fun (#xmlel{name = <<"x">>,
 					 attrs = Attrs, children = Fields}) ->
-				     case {xml:get_attr_s(<<"xmlns">>, Attrs),
-					   xml:get_attr_s(<<"type">>, Attrs)}
+				     case {fxml:get_attr_s(<<"xmlns">>, Attrs),
+					   fxml:get_attr_s(<<"type">>, Attrs)}
 					 of
 				       {?NS_XDATA, <<"result">>} ->
 					   [concat_xdata_fields(Fields)];
@@ -606,10 +606,10 @@ concat_xdata_fields(Fields) ->
 					  attrs = Attrs, children = Els} =
 				       El,
 				   [FormType, VarFields] = Acc) ->
-				      case xml:get_attr_s(<<"var">>, Attrs) of
+				      case fxml:get_attr_s(<<"var">>, Attrs) of
 					<<"">> -> Acc;
 					<<"FORM_TYPE">> ->
-					    [xml:get_subtag_cdata(El,
+					    [fxml:get_subtag_cdata(El,
 								  <<"value">>),
 					     VarFields];
 					Var ->
@@ -622,7 +622,7 @@ concat_xdata_fields(Fields) ->
 										  children
 										      =
 										      VEls}) ->
-									      [[xml:get_cdata(VEls),
+									      [[fxml:get_cdata(VEls),
 										$<]];
 									  (_) ->
 									      []
@@ -648,7 +648,7 @@ gb_trees_fold_iter(F, Acc, Iter) ->
     end.
 
 now_ts() ->
-    {MegaSecs, Secs, _} = now(), MegaSecs * 1000000 + Secs.
+    p1_time_compat:system_time(seconds).
 
 is_valid_node(Node) ->
     case str:tokens(Node, <<"#">>) of
@@ -752,3 +752,11 @@ import_next(LServer, DBType, NodePair) ->
             ok
     end,
     import_next(LServer, DBType, ets:next(caps_features_tmp, NodePair)).
+
+mod_opt_type(cache_life_time) ->
+    fun (I) when is_integer(I), I > 0 -> I end;
+mod_opt_type(cache_size) ->
+    fun (I) when is_integer(I), I > 0 -> I end;
+mod_opt_type(db_type) -> fun gen_mod:v_db/1;
+mod_opt_type(_) ->
+    [cache_life_time, cache_size, db_type].

@@ -5,7 +5,7 @@
 %%% Created :  1 Nov 2006 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -24,6 +24,8 @@
 %%%----------------------------------------------------------------------
 
 -module(ejabberd_node_groups).
+
+-behaviour(ejabberd_config).
 -author('alexey@process-one.net').
 
 -behaviour(gen_server).
@@ -35,9 +37,8 @@
 	 get_members/1,
 	 get_closest_node/1]).
 
-%% gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-	 terminate/2, code_change/3]).
+-export([init/1, handle_call/3, handle_cast/2,
+	 handle_info/2, terminate/2, code_change/3, opt_type/1]).
 
 -define(PG2, pg2).
 
@@ -163,3 +164,10 @@ code_change(_OldVsn, State, _Extra) ->
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
+
+opt_type(node_type) ->
+    fun (frontend) -> frontend;
+	(backend) -> backend;
+	(generic) -> generic
+    end;
+opt_type(_) -> [node_type].

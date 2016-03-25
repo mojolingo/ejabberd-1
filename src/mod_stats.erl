@@ -5,7 +5,7 @@
 %%% Created : 11 Jan 2003 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -27,9 +27,12 @@
 
 -author('alexey@process-one.net').
 
+-protocol({xep, 39, '0.6.0'}).
+
 -behaviour(gen_mod).
 
--export([start/2, stop/1, process_local_iq/3]).
+-export([start/2, stop/1, process_local_iq/3,
+	 mod_opt_type/1]).
 
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -54,7 +57,7 @@ process_local_iq(_From, To,
 	  IQ#iq{type = error, sub_el = [SubEl, ?ERR_NOT_ALLOWED]};
       get ->
 	  #xmlel{children = Els} = SubEl,
-	  Node = str:tokens(xml:get_tag_attr_s(<<"node">>, SubEl),
+	  Node = str:tokens(fxml:get_tag_attr_s(<<"node">>, SubEl),
 			    <<"/">>),
 	  Names = get_names(Els, []),
 	  case get_local_stats(To#jid.server, Node, Names) of
@@ -73,7 +76,7 @@ get_names([], Res) -> Res;
 get_names([#xmlel{name = <<"stat">>, attrs = Attrs}
 	   | Els],
 	  Res) ->
-    Name = xml:get_attr_s(<<"name">>, Attrs),
+    Name = fxml:get_attr_s(<<"name">>, Attrs),
     case Name of
       <<"">> -> get_names(Els, Res);
       _ -> get_names(Els, [Name | Res])
@@ -172,7 +175,7 @@ get_local_stat(_Server, _, Name) ->
 
 get_node_stat(Node, Name)
     when Name == <<"time/uptime">> ->
-    case catch rpc:call(Node, erlang, statistics,
+    case catch ejabberd_cluster:call(Node, erlang, statistics,
 			[wall_clock])
 	of
       {badrpc, _Reason} ->
@@ -185,7 +188,7 @@ get_node_stat(Node, Name)
     end;
 get_node_stat(Node, Name)
     when Name == <<"time/cputime">> ->
-    case catch rpc:call(Node, erlang, statistics, [runtime])
+    case catch ejabberd_cluster:call(Node, erlang, statistics, [runtime])
 	of
       {badrpc, _Reason} ->
 	  ?STATERR(<<"500">>, <<"Internal Server Error">>);
@@ -197,7 +200,7 @@ get_node_stat(Node, Name)
     end;
 get_node_stat(Node, Name)
     when Name == <<"users/online">> ->
-    case catch rpc:call(Node, ejabberd_sm,
+    case catch ejabberd_cluster:call(Node, ejabberd_sm,
 			dirty_get_my_sessions_list, [])
 	of
       {badrpc, _Reason} ->
@@ -208,7 +211,7 @@ get_node_stat(Node, Name)
     end;
 get_node_stat(Node, Name)
     when Name == <<"transactions/committed">> ->
-    case catch rpc:call(Node, mnesia, system_info,
+    case catch ejabberd_cluster:call(Node, mnesia, system_info,
 			[transaction_commits])
 	of
       {badrpc, _Reason} ->
@@ -219,7 +222,7 @@ get_node_stat(Node, Name)
     end;
 get_node_stat(Node, Name)
     when Name == <<"transactions/aborted">> ->
-    case catch rpc:call(Node, mnesia, system_info,
+    case catch ejabberd_cluster:call(Node, mnesia, system_info,
 			[transaction_failures])
 	of
       {badrpc, _Reason} ->
@@ -230,7 +233,7 @@ get_node_stat(Node, Name)
     end;
 get_node_stat(Node, Name)
     when Name == <<"transactions/restarted">> ->
-    case catch rpc:call(Node, mnesia, system_info,
+    case catch ejabberd_cluster:call(Node, mnesia, system_info,
 			[transaction_restarts])
 	of
       {badrpc, _Reason} ->
@@ -241,7 +244,7 @@ get_node_stat(Node, Name)
     end;
 get_node_stat(Node, Name)
     when Name == <<"transactions/logged">> ->
-    case catch rpc:call(Node, mnesia, system_info,
+    case catch ejabberd_cluster:call(Node, mnesia, system_info,
 			[transaction_log_writes])
 	of
       {badrpc, _Reason} ->
@@ -263,3 +266,6 @@ search_running_node(SNode, [Node | Nodes]) ->
       SNode -> Node;
       _ -> search_running_node(SNode, Nodes)
     end.
+
+mod_opt_type(iqdisc) -> fun gen_iq_handler:check_type/1;
+mod_opt_type(_) -> [iqdisc].

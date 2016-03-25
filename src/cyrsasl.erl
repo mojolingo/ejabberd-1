@@ -5,7 +5,7 @@
 %%% Created :  8 Mar 2003 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -25,10 +25,13 @@
 
 -module(cyrsasl).
 
+-behaviour(ejabberd_config).
+
 -author('alexey@process-one.net').
 
 -export([start/0, register_mechanism/3, listmech/1,
-	 server_new/7, server_start/3, server_step/2]).
+	 server_new/7, server_start/3, server_step/2,
+	 opt_type/1]).
 
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -81,6 +84,7 @@ start() ->
     cyrsasl_digest:start([]),
     cyrsasl_scram:start([]),
     cyrsasl_anonymous:start([]),
+    cyrsasl_oauth:start([]),
     ok.
 
 %%
@@ -107,13 +111,13 @@ register_mechanism(Mechanism, Module, PasswordType) ->
 %%-include("ejabberd.hrl").
 %%-include("jlib.hrl").
 %%check_authzid(_State, Props) ->
-%%    AuthzId = xml:get_attr_s(authzid, Props),
-%%    case jlib:string_to_jid(AuthzId) of
+%%    AuthzId = fxml:get_attr_s(authzid, Props),
+%%    case jid:from_string(AuthzId) of
 %%	error ->
 %%	    {error, "invalid-authzid"};
 %%	JID ->
-%%	    LUser = jlib:nodeprep(xml:get_attr_s(username, Props)),
-%%	    {U, S, R} = jlib:jid_tolower(JID),
+%%	    LUser = jid:nodeprep(fxml:get_attr_s(username, Props)),
+%%	    {U, S, R} = jid:tolower(JID),
 %%	    case R of
 %%		"" ->
 %%		    {error, "invalid-authzid"};
@@ -128,8 +132,8 @@ register_mechanism(Mechanism, Module, PasswordType) ->
 %%    end.
 
 check_credentials(_State, Props) ->
-    User = proplists:get_value(username, Props, <<>>),
-    case jlib:nodeprep(User) of
+    User = proplists:get_value(authzid, Props, <<>>),
+    case jid:nodeprep(User) of
       error -> {error, <<"not-authorized">>};
       <<"">> -> {error, <<"not-authorized">>};
       _LUser -> ok
@@ -237,3 +241,10 @@ is_disabled(Mechanism) ->
 			 [str:to_upper(V)]
 		 end, []),
     lists:member(Mechanism, Disabled).
+
+opt_type(disable_sasl_mechanisms) ->
+    fun (V) when is_list(V) ->
+	    lists:map(fun (M) -> str:to_upper(M) end, V);
+	(V) -> [str:to_upper(V)]
+    end;
+opt_type(_) -> [disable_sasl_mechanisms].

@@ -1,6 +1,6 @@
 %%%----------------------------------------------------------------------
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -35,12 +35,10 @@
 -define(NS_BLOCKING, <<"urn:xmpp:blocking">>).
 -define(NS_PRIVATE, <<"jabber:iq:private">>).
 -define(NS_VERSION, <<"jabber:iq:version">>).
--define(NS_TIME90, <<"jabber:iq:time">>).
 -define(NS_TIME, <<"urn:xmpp:time">>).
 -define(NS_LAST, <<"jabber:iq:last">>).
 -define(NS_XDATA, <<"jabber:x:data">>).
 -define(NS_IQDATA, <<"jabber:iq:data">>).
--define(NS_DELAY91, <<"jabber:x:delay">>).
 -define(NS_DELAY, <<"urn:xmpp:delay">>).
 -define(NS_HINTS, <<"urn:xmpp:hints">>).
 -define(NS_EXPIRE, <<"jabber:x:expire">>).
@@ -133,6 +131,7 @@
 -define(NS_FEATURE_COMPRESS,
 	<<"http://jabber.org/features/compress">>).
 -define(NS_FEATURE_MSGOFFLINE, <<"msgoffline">>).
+-define(NS_FLEX_OFFLINE, <<"http://jabber.org/protocol/offline">>).
 -define(NS_COMPRESS,
 	<<"http://jabber.org/protocol/compress">>).
 -define(NS_CAPS, <<"http://jabber.org/protocol/caps">>).
@@ -143,6 +142,10 @@
 -define(NS_CAPTCHA, <<"urn:xmpp:captcha">>).
 -define(NS_MEDIA, <<"urn:xmpp:media-element">>).
 -define(NS_BOB, <<"urn:xmpp:bob">>).
+-define(NS_MAM_TMP, <<"urn:xmpp:mam:tmp">>).
+-define(NS_MAM_0, <<"urn:xmpp:mam:0">>).
+-define(NS_MAM_1, <<"urn:xmpp:mam:1">>).
+-define(NS_SID_0, <<"urn:xmpp:sid:0">>).
 -define(NS_PING, <<"urn:xmpp:ping">>).
 -define(NS_CARBONS_2, <<"urn:xmpp:carbons:2">>).
 -define(NS_CARBONS_1, <<"urn:xmpp:carbons:1">>).
@@ -150,3 +153,14 @@
 -define(NS_CLIENT_STATE,  <<"urn:xmpp:csi:0">>).
 -define(NS_STREAM_MGMT_2,  <<"urn:xmpp:sm:2">>).
 -define(NS_STREAM_MGMT_3,  <<"urn:xmpp:sm:3">>).
+-define(NS_HTTP_UPLOAD, <<"urn:xmpp:http:upload">>).
+-define(NS_HTTP_UPLOAD_OLD, <<"eu:siacs:conversations:http:upload">>).
+-define(NS_THUMBS_1, <<"urn:xmpp:thumbs:1">>).
+-define(NS_NICK,  <<"http://jabber.org/protocol/nick">>).
+-define(NS_MIX_0, <<"urn:xmpp:mix:0">>).
+-define(NS_MIX_SERVICEINFO_0, <<"urn:xmpp:mix:0#serviceinfo">>).
+-define(NS_MIX_NODES_MESSAGES, <<"urn:xmpp:mix:nodes:messages">>).
+-define(NS_MIX_NODES_PRESENCE, <<"urn:xmpp:mix:nodes:presence">>).
+-define(NS_MIX_NODES_PARTICIPANTS, <<"urn:xmpp:mix:nodes:participants">>).
+-define(NS_MIX_NODES_SUBJECT, <<"urn:xmpp:mix:nodes:subject">>).
+-define(NS_MIX_NODES_CONFIG, <<"urn:xmpp:mix:nodes:config">>).

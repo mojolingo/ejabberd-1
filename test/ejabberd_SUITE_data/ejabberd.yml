@@ -1,19 +1,19 @@
 host_config: 
   "pgsql.localhost": 
-    odbc_username: "ejabberd_test"
+    odbc_username: "@@pgsql_user@@"
     odbc_type: pgsql
-    odbc_server: "localhost"
-    odbc_port: 5432
+    odbc_server: "@@pgsql_server@@"
+    odbc_port: @@pgsql_port@@
     odbc_pool_size: 1
-    odbc_password: "ejabberd_test"
-    odbc_database: "ejabberd_test"
+    odbc_password: "@@pgsql_pass@@"
+    odbc_database: "@@pgsql_db@@"
     auth_method: odbc
+    sm_db_type: odbc
     modules: 
       mod_announce: 
         db_type: odbc
         access: local
-      mod_blocking: 
-        db_type: odbc
+      mod_blocking: []
       mod_caps: 
         db_type: odbc
       mod_last: 
@@ -26,7 +26,8 @@ host_config:
         db_type: odbc
       mod_private: 
         db_type: odbc
-      mod_pubsub_odbc: 
+      mod_pubsub: 
+        db_type: odbc
         access_createnode: pubsub_createnode
         ignore_pep_from_offline: true
         last_item_cache: false
@@ -34,9 +35,12 @@ host_config:
           - "flat"
           - "hometree"
           - "pep"
+      mod_mix: []
       mod_roster:
         versioning: true
         store_current_id: true
+        db_type: odbc
+      mod_mam:
         db_type: odbc
       mod_vcard: 
         db_type: odbc
@@ -58,12 +62,12 @@ Welcome to this XMPP server."
   "sqlite.localhost": 
     odbc_type: sqlite
     auth_method: odbc
+    sm_db_type: odbc
     modules: 
       mod_announce: 
         db_type: odbc
         access: local
-      mod_blocking: 
-        db_type: odbc
+      mod_blocking: []
       mod_caps: 
         db_type: odbc
       mod_last: 
@@ -76,7 +80,8 @@ Welcome to this XMPP server."
         db_type: odbc
       mod_private: 
         db_type: odbc
-      mod_pubsub_odbc: 
+      mod_pubsub: 
+        db_type: odbc
         access_createnode: pubsub_createnode
         ignore_pep_from_offline: true
         last_item_cache: false
@@ -84,9 +89,12 @@ Welcome to this XMPP server."
           - "flat"
           - "hometree"
           - "pep"
+      mod_mix: []
       mod_roster:
         versioning: true
         store_current_id: true
+        db_type: odbc
+      mod_mam:
         db_type: odbc
       mod_vcard: 
         db_type: odbc
@@ -106,20 +114,20 @@ Welcome to this XMPP server."
       mod_time: []
       mod_version: []
   "mysql.localhost": 
-    odbc_username: "ejabberd_test"
+    odbc_username: "@@mysql_user@@"
     odbc_type: mysql
-    odbc_server: "localhost"
-    odbc_port: 3306
+    odbc_server: "@@mysql_server@@"
+    odbc_port: @@mysql_port@@
     odbc_pool_size: 1
-    odbc_password: "ejabberd_test"
-    odbc_database: "ejabberd_test"
+    odbc_password: "@@mysql_pass@@"
+    odbc_database: "@@mysql_db@@"
     auth_method: odbc
+    sm_db_type: odbc
     modules: 
       mod_announce: 
         db_type: odbc
         access: local
-      mod_blocking: 
-        db_type: odbc
+      mod_blocking: []
       mod_caps: 
         db_type: odbc
       mod_last: 
@@ -132,7 +140,8 @@ Welcome to this XMPP server."
         db_type: odbc
       mod_private: 
         db_type: odbc
-      mod_pubsub_odbc: 
+      mod_pubsub: 
+        db_type: odbc
         access_createnode: pubsub_createnode
         ignore_pep_from_offline: true
         last_item_cache: false
@@ -140,9 +149,12 @@ Welcome to this XMPP server."
           - "flat"
           - "hometree"
           - "pep"
+      mod_mix: []
       mod_roster: 
         versioning: true
         store_current_id: true
+        db_type: odbc
+      mod_mam:
         db_type: odbc
       mod_vcard: 
         db_type: odbc
@@ -167,8 +179,7 @@ Welcome to this XMPP server."
       mod_announce: 
         db_type: internal
         access: local
-      mod_blocking: 
-        db_type: internal
+      mod_blocking: []
       mod_caps: 
         db_type: internal
       mod_last: 
@@ -189,16 +200,74 @@ Welcome to this XMPP server."
           - "flat"
           - "hometree"
           - "pep"
+      mod_mix: []
       mod_roster: 
         versioning: true
         store_current_id: true
+        db_type: internal
+      mod_mam:
         db_type: internal
       mod_vcard: 
         db_type: internal
       mod_vcard_xupdate:
         db_type: internal
-      mod_carboncopy:
+      mod_carboncopy: []
+      mod_client_state:
+        drop_chat_states: true
+        queue_presence: true
+      mod_adhoc: []
+      mod_configure: []
+      mod_disco: []
+      mod_ping: []
+      mod_proxy65: []
+      mod_register: 
+        welcome_message: 
+          subject: "Welcome!"
+          body: "Hi.
+Welcome to this XMPP server."
+      mod_stats: []
+      mod_time: []
+      mod_version: []
+  "redis.localhost": 
+    auth_method: internal
+    sm_db_type: redis
+    modules: 
+      mod_announce: 
         db_type: internal
+        access: local
+      mod_blocking: []
+      mod_caps: 
+        db_type: internal
+      mod_last: 
+        db_type: internal
+      mod_muc: 
+        db_type: internal
+      mod_offline: 
+        db_type: internal
+      mod_privacy: 
+        db_type: internal
+      mod_private: 
+        db_type: internal
+      mod_pubsub: 
+        access_createnode: pubsub_createnode
+        ignore_pep_from_offline: true
+        last_item_cache: false
+        plugins: 
+          - "flat"
+          - "hometree"
+          - "pep"
+      mod_mix: []
+      mod_roster: 
+        versioning: true
+        store_current_id: true
+        db_type: internal
+      mod_mam:
+        db_type: internal
+      mod_vcard: 
+        db_type: internal
+      mod_vcard_xupdate:
+        db_type: internal
+      mod_carboncopy: []
       mod_client_state:
         drop_chat_states: true
         queue_presence: true
@@ -221,8 +290,7 @@ Welcome to this XMPP server."
       mod_announce: 
         db_type: riak
         access: local
-      mod_blocking: 
-        db_type: riak
+      mod_blocking: []
       mod_caps: 
         db_type: riak
       mod_last: 
@@ -287,6 +355,7 @@ Welcome to this XMPP server."
 hosts: 
   - "localhost"
   - "mnesia.localhost"
+  - "redis.localhost"
   - "mysql.localhost"
   - "pgsql.localhost"
   - "extauth.localhost"
@@ -331,7 +400,7 @@ define_macro:
 language: "en"
 listen: 
   - 
-    port: 5222
+    port: @@c2s_port@@
     module: ejabberd_c2s
     max_stanza_size: 65536
     certfile: CERTFILE
@@ -340,10 +409,10 @@ listen:
     shaper: c2s_shaper
     access: c2s
   - 
-    port: 5269
+    port: @@s2s_port@@
     module: ejabberd_s2s_in
   - 
-    port: 5280
+    port: @@web_port@@
     module: ejabberd_http
     captcha: true
 loglevel: 4

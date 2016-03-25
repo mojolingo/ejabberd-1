@@ -5,7 +5,7 @@
 %%% Created : 17 Feb 2006 by Mickael Remond <mremond@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -24,6 +24,8 @@
 %%%----------------------------------------------------------------------
 
 -module(ejabberd_auth_anonymous).
+
+-behaviour(ejabberd_config).
 -author('mickael.remond@process-one.net').
 
 -export([start/1,
@@ -36,16 +38,15 @@
 	 unregister_connection/3
 	]).
 
-
-%% Function used by ejabberd_auth:
--export([login/2, set_password/3, check_password/3,
-	 check_password/5, try_register/3,
+-export([login/2, set_password/3, check_password/4,
+	 check_password/6, try_register/3,
 	 dirty_get_registered_users/0, get_vh_registered_users/1,
-         get_vh_registered_users/2, get_vh_registered_users_number/1,
-         get_vh_registered_users_number/2, get_password_s/2,
+	 get_vh_registered_users/2,
+	 get_vh_registered_users_number/1,
+	 get_vh_registered_users_number/2, get_password_s/2,
 	 get_password/2, get_password/3, is_user_exists/2,
 	 remove_user/2, remove_user/3, store_type/0,
-	 plain_password_required/0]).
+	 plain_password_required/0, opt_type/1]).
 
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -55,7 +56,7 @@
 %% Create the anonymous table if at least one virtual host has anonymous features enabled
 %% Register to login / logout events
 -record(anonymous, {us = {<<"">>, <<"">>} :: {binary(), binary()},
-                    sid = {now(), self()} :: ejabberd_sm:sid()}).
+                    sid = {p1_time_compat:timestamp(), self()} :: ejabberd_sm:sid()}).
 
 start(Host) ->
     %% TODO: Check cluster mode
@@ -121,8 +122,8 @@ allow_multiple_connections(Host) ->
 
 %% Check if user exist in the anonymus database
 anonymous_user_exist(User, Server) ->
-    LUser = jlib:nodeprep(User),
-    LServer = jlib:nameprep(Server),
+    LUser = jid:nodeprep(User),
+    LServer = jid:nameprep(Server),
     US = {LUser, LServer},
     case catch mnesia:dirty_read({anonymous, US}) of
 	[] ->
@@ -141,7 +142,7 @@ remove_connection(SID, LUser, LServer) ->
 %% Register connection
 register_connection(SID,
 		    #jid{luser = LUser, lserver = LServer}, Info) ->
-    AuthModule = list_to_atom(binary_to_list(xml:get_attr_s(<<"auth_module">>, Info))),
+    AuthModule = proplists:get_value(auth_module, Info, undefined),
     case AuthModule == (?MODULE) of
       true ->
 	  ejabberd_hooks:run(register_user, LServer,
@@ -174,11 +175,11 @@ purge_hook(true, LUser, LServer) ->
 
 %% When anonymous login is enabled, check the password for permenant users
 %% before allowing access
-check_password(User, Server, Password) ->
-    check_password(User, Server, Password, undefined,
+check_password(User, AuthzId, Server, Password) ->
+    check_password(User, AuthzId, Server, Password, undefined,
 		   undefined).
 
-check_password(User, Server, _Password, _Digest,
+check_password(User, _AuthzId, Server, _Password, _Digest,
 	       _DigestGen) ->
     case
       ejabberd_auth:is_user_exists_in_other_modules(?MODULE,
@@ -269,3 +270,13 @@ plain_password_required() -> false.
 
 store_type() ->
 	plain.
+
+opt_type(allow_multiple_connections) ->
+    fun (V) when is_boolean(V) -> V end;
+opt_type(anonymous_protocol) ->
+    fun (sasl_anon) -> sasl_anon;
+	(login_anon) -> login_anon;
+	(both) -> both
+    end;
+opt_type(_) ->
+    [allow_multiple_connections, anonymous_protocol].

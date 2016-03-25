@@ -1,12 +1,12 @@
 %%%-------------------------------------------------------------------
 %%% @author Evgeny Khramtsov <ekhramtsov@process-one.net>
-%%% @copyright (C) 2014, Evgeny Khramtsov
 %%% @doc
 %%%
 %%% @end
 %%% Created : 21 Apr 2014 by Evgeny Khramtsov <ekhramtsov@process-one.net>
 %%%
-%%% ejabberd, Copyright (C) 2014-2015   ProcessOne
+%%%
+%%% ejabberd, Copyright (C) 2014-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -24,6 +24,7 @@
 
 %%%-------------------------------------------------------------------
 -module(mod_sip).
+-protocol({rfc, 3261}).
 
 -behaviour(gen_mod).
 -behaviour(esip).
@@ -31,9 +32,9 @@
 %% API
 -export([start/2, stop/1, make_response/2, is_my_host/1, at_my_host/1]).
 
-%% esip_callbacks
--export([data_in/2, data_out/2, message_in/2, message_out/2,
-	 request/2, request/3, response/2, locate/1]).
+-export([data_in/2, data_out/2, message_in/2,
+	 message_out/2, request/2, request/3, response/2,
+	 locate/1, mod_opt_type/1]).
 
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -159,8 +160,8 @@ locate(_SIPMsg) ->
     ok.
 
 find(#uri{user = User, host = Host}) ->
-    LUser = jlib:nodeprep(User),
-    LServer = jlib:nameprep(Host),
+    LUser = jid:nodeprep(User),
+    LServer = jid:nameprep(Host),
     if LUser == <<"">> ->
 	    to_me;
        true ->
@@ -191,7 +192,7 @@ action(#sip{method = <<"REGISTER">>, type = request, hdrs = Hdrs,
 				true ->
 				    register;
 				false ->
-				    {auth, jlib:nameprep(ToURI#uri.host)}
+				    {auth, jid:nameprep(ToURI#uri.host)}
 			    end;
 			false ->
 			    deny
@@ -222,7 +223,7 @@ action(#sip{method = Method, hdrs = Hdrs, type = request} = Req, SIPSock) ->
 					true ->
 					    find(ToURI);
 					false ->
-					    LServer = jlib:nameprep(FromURI#uri.host),
+					    LServer = jid:nameprep(FromURI#uri.host),
 					    {relay, LServer}
 				    end;
                                 false ->
@@ -249,8 +250,8 @@ check_auth(#sip{method = Method, hdrs = Hdrs, body = Body}, AuthHdr, _SIPSock) -
                      from
              end,
     {_, #uri{user = User, host = Host}, _} = esip:get_hdr(Issuer, Hdrs),
-    LUser = jlib:nodeprep(User),
-    LServer = jlib:nameprep(Host),
+    LUser = jid:nodeprep(User),
+    LServer = jid:nameprep(Host),
     case lists:filter(
            fun({_, Params}) ->
                    Username = esip:get_param(<<"username">>, Params),
@@ -262,8 +263,12 @@ check_auth(#sip{method = Method, hdrs = Hdrs, body = Body}, AuthHdr, _SIPSock) -
 	    case ejabberd_auth:get_password_s(LUser, LServer) of
 		<<"">> ->
 		    false;
-		Password ->
-		    esip:check_auth(Auth, Method, Body, Password)
+		Password when is_binary(Password) ->
+		    esip:check_auth(Auth, Method, Body, Password);
+		_ScramedPassword ->
+		    ?ERROR_MSG("unable to authenticate ~s@~s against SCRAM'ed "
+			       "password", [LUser, LServer]),
+		    false
 	    end;
         [] ->
             false
@@ -294,7 +299,48 @@ make_response(Req, Resp) ->
     esip:make_response(Req, Resp, esip:make_tag()).
 
 at_my_host(#uri{host = Host}) ->
-    is_my_host(jlib:nameprep(Host)).
+    is_my_host(jid:nameprep(Host)).
 
 is_my_host(LServer) ->
     gen_mod:is_loaded(LServer, ?MODULE).
+
+mod_opt_type(always_record_route) ->
+    fun (true) -> true;
+	(false) -> false
+    end;
+mod_opt_type(flow_timeout_tcp) ->
+    fun (I) when is_integer(I), I > 0 -> I end;
+mod_opt_type(flow_timeout_udp) ->
+    fun (I) when is_integer(I), I > 0 -> I end;
+mod_opt_type(record_route) ->
+    fun (IOList) ->
+	    S = iolist_to_binary(IOList),
+	    #uri{} = esip:decode_uri(S)
+    end;
+mod_opt_type(routes) ->
+    fun (L) ->
+	    lists:map(fun (IOList) ->
+			      S = iolist_to_binary(IOList),
+			      #uri{} = esip:decode_uri(S)
+		      end,
+		      L)
+    end;
+mod_opt_type(via) ->
+    fun (L) ->
+	    lists:map(fun (Opts) ->
+			      Type = proplists:get_value(type, Opts),
+			      Host = proplists:get_value(host, Opts),
+			      Port = proplists:get_value(port, Opts),
+			      true = (Type == tcp) or (Type == tls) or
+				       (Type == udp),
+			      true = is_binary(Host) and (Host /= <<"">>),
+			      true = is_integer(Port) and (Port > 0) and
+				       (Port < 65536)
+				       or (Port == undefined),
+			      {Type, {Host, Port}}
+		      end,
+		      L)
+    end;
+mod_opt_type(_) ->
+    [always_record_route, flow_timeout_tcp,
+     flow_timeout_udp, record_route, routes, via].

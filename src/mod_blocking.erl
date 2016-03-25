@@ -5,7 +5,7 @@
 %%% Created : 24 Aug 2008 by Stephan Maka <stephan@spaceboyz.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -17,10 +17,9 @@
 %%% MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 %%% General Public License for more details.
 %%%
-%%% You should have received a copy of the GNU General Public License
-%%% along with this program; if not, write to the Free Software
-%%% Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
-%%% 02111-1307 USA
+%%% You should have received a copy of the GNU General Public License along
+%%% with this program; if not, write to the Free Software Foundation, Inc.,
+%%% 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 %%%
 %%%----------------------------------------------------------------------
 
@@ -28,8 +27,10 @@
 
 -behaviour(gen_mod).
 
+-protocol({xep, 191, '1.2'}).
+
 -export([start/2, stop/1, process_iq/3,
-	 process_iq_set/4, process_iq_get/5]).
+	 process_iq_set/4, process_iq_get/5, mod_opt_type/1]).
 
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -75,7 +76,7 @@ process_iq_set(_, From, _To,
 		   sub_el =
 		       #xmlel{name = SubElName, children = SubEls}}) ->
     #jid{luser = LUser, lserver = LServer} = From,
-    Res = case {SubElName, xml:remove_cdata(SubEls)} of
+    Res = case {SubElName, fxml:remove_cdata(SubEls)} of
 	    {<<"block">>, []} -> {error, ?ERR_BAD_REQUEST};
 	    {<<"block">>, Els} ->
 		JIDs = parse_blocklist_items(Els, []),
@@ -115,9 +116,9 @@ parse_blocklist_items([#xmlel{name = <<"item">>,
 			      attrs = Attrs}
 		       | Els],
 		      JIDs) ->
-    case xml:get_attr(<<"jid">>, Attrs) of
+    case fxml:get_attr(<<"jid">>, Attrs) of
       {value, JID1} ->
-	  JID = jlib:jid_tolower(jlib:string_to_jid(JID1)),
+	  JID = jid:tolower(jid:from_string(JID1)),
 	  parse_blocklist_items(Els, [JID | JIDs]);
       false -> parse_blocklist_items(Els, JIDs)
     end;
@@ -222,23 +223,18 @@ process_blocklist_block(LUser, LServer, Filter, odbc) ->
 		Default = case
 			    mod_privacy:sql_get_default_privacy_list_t(LUser)
 			      of
-			    {selected, [<<"name">>], []} ->
+			    {selected, []} ->
 				Name = <<"Blocked contacts">>,
 				mod_privacy:sql_add_privacy_list(LUser, Name),
 				mod_privacy:sql_set_default_privacy_list(LUser,
 									 Name),
 				Name;
-			    {selected, [<<"name">>], [[Name]]} -> Name
+			    {selected, [{Name}]} -> Name
 			  end,
-		{selected, [<<"id">>], [[ID]]} =
+		{selected, [{ID}]} =
 		    mod_privacy:sql_get_privacy_list_id_t(LUser, Default),
-		case mod_privacy:sql_get_privacy_list_data_by_id_t(ID)
-		    of
-		  {selected,
-		   [<<"t">>, <<"value">>, <<"action">>, <<"ord">>,
-		    <<"match_all">>, <<"match_iq">>, <<"match_message">>,
-		    <<"match_presence_in">>, <<"match_presence_out">>],
-		   RItems = [_ | _]} ->
+		case mod_privacy:sql_get_privacy_list_data_by_id_t(ID) of
+		  {selected, RItems = [_ | _]} ->
 		      List = lists:flatmap(fun mod_privacy:raw_to_item/1, RItems);
 		  _ -> List = []
 		end,
@@ -344,17 +340,12 @@ unblock_by_filter(LUser, LServer, Filter, odbc) ->
     F = fun () ->
 		case mod_privacy:sql_get_default_privacy_list_t(LUser)
 		    of
-		  {selected, [<<"name">>], []} -> ok;
-		  {selected, [<<"name">>], [[Default]]} ->
-		      {selected, [<<"id">>], [[ID]]} =
+		  {selected, []} -> ok;
+		  {selected, [{Default}]} ->
+		      {selected, [{ID}]} =
 			  mod_privacy:sql_get_privacy_list_id_t(LUser, Default),
-		      case mod_privacy:sql_get_privacy_list_data_by_id_t(ID)
-			  of
-			{selected,
-			 [<<"t">>, <<"value">>, <<"action">>, <<"ord">>,
-			  <<"match_all">>, <<"match_iq">>, <<"match_message">>,
-			  <<"match_presence_in">>, <<"match_presence_out">>],
-			 RItems = [_ | _]} ->
+		      case mod_privacy:sql_get_privacy_list_data_by_id_t(ID) of
+			{selected, RItems = [_ | _]} ->
 			    List = lists:flatmap(fun mod_privacy:raw_to_item/1,
                                                  RItems),
 			    NewList = Filter(List),
@@ -374,13 +365,13 @@ make_userlist(Name, List) ->
     #userlist{name = Name, list = List, needdb = NeedDb}.
 
 broadcast_list_update(LUser, LServer, Name, UserList) ->
-    ejabberd_sm:route(jlib:make_jid(LUser, LServer,
+    ejabberd_sm:route(jid:make(LUser, LServer,
                                     <<"">>),
-                      jlib:make_jid(LUser, LServer, <<"">>),
+                      jid:make(LUser, LServer, <<"">>),
                       {broadcast, {privacy_list, UserList, Name}}).
 
 broadcast_blocklist_event(LUser, LServer, Event) ->
-    JID = jlib:make_jid(LUser, LServer, <<"">>),
+    JID = jid:make(LUser, LServer, <<"">>),
     ejabberd_sm:route(JID, JID,
                       {broadcast, {blocking, Event}}).
 
@@ -396,7 +387,7 @@ process_blocklist_get(LUser, LServer) ->
 				    #xmlel{name = <<"item">>,
 					   attrs =
 					       [{<<"jid">>,
-						 jlib:jid_to_string(JID)}],
+						 jid:to_string(JID)}],
 					   children = []}
 			    end,
 			    JIDs),
@@ -434,18 +425,17 @@ process_blocklist_get(LUser, LServer, odbc) ->
     case catch
 	   mod_privacy:sql_get_default_privacy_list(LUser, LServer)
 	of
-      {selected, [<<"name">>], []} -> [];
-      {selected, [<<"name">>], [[Default]]} ->
+      {selected, []} -> [];
+      {selected, [{Default}]} ->
 	  case catch mod_privacy:sql_get_privacy_list_data(LUser,
 							   LServer, Default)
 	      of
-	    {selected,
-	     [<<"t">>, <<"value">>, <<"action">>, <<"ord">>,
-	      <<"match_all">>, <<"match_iq">>, <<"match_message">>,
-	      <<"match_presence_in">>, <<"match_presence_out">>],
-	     RItems} ->
+	    {selected, RItems} ->
 		lists:flatmap(fun mod_privacy:raw_to_item/1, RItems);
 	    {'EXIT', _} -> error
 	  end;
       {'EXIT', _} -> error
     end.
+
+mod_opt_type(iqdisc) -> fun gen_iq_handler:check_type/1;
+mod_opt_type(_) -> [iqdisc].

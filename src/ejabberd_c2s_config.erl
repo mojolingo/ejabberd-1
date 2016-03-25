@@ -6,7 +6,7 @@
 %%% Created :  2 Nov 2007 by Mickael Remond <mremond@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -26,9 +26,11 @@
 
 -module(ejabberd_c2s_config).
 
+-behaviour(ejabberd_config).
+
 -author('mremond@process-one.net').
 
--export([get_c2s_limits/0]).
+-export([get_c2s_limits/0, opt_type/1]).
 
 %% Get first c2s configuration limitations to apply it to other c2s
 %% connectors.
@@ -63,3 +65,6 @@ select_opts_values([{max_stanza_size, Value} | Opts],
 		       [{max_stanza_size, Value} | SelectedValues]);
 select_opts_values([_Opt | Opts], SelectedValues) ->
     select_opts_values(Opts, SelectedValues).
+
+opt_type(listen) -> fun (V) -> V end;
+opt_type(_) -> [listen].

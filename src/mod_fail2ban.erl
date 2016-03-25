@@ -1,12 +1,12 @@
 %%%-------------------------------------------------------------------
 %%% @author Evgeny Khramtsov <ekhramtsov@process-one.net>
-%%% @copyright (C) 2014, Evgeny Khramtsov
 %%% @doc
 %%%
 %%% @end
 %%% Created : 15 Aug 2014 by Evgeny Khramtsov <ekhramtsov@process-one.net>
 %%%
-%%% ejabberd, Copyright (C) 2014-2015   ProcessOne
+%%%
+%%% ejabberd, Copyright (C) 2014-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -31,9 +31,9 @@
 %% API
 -export([start_link/2, start/2, stop/1, c2s_auth_result/4, check_bl_c2s/3]).
 
-%% gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-	 terminate/2, code_change/3]).
+-export([init/1, handle_call/3, handle_cast/2,
+	 handle_info/2, terminate/2, code_change/3,
+	 mod_opt_type/1]).
 
 -include_lib("stdlib/include/ms_transform.hrl").
 -include("ejabberd.hrl").
@@ -53,20 +53,25 @@ start_link(Host, Opts) ->
     gen_server:start_link({local, Proc}, ?MODULE, [Host, Opts], []).
 
 c2s_auth_result(false, _User, LServer, {Addr, _Port}) ->
-    BanLifetime = gen_mod:get_module_opt(
-		    LServer, ?MODULE, c2s_auth_ban_lifetime,
-		    fun(T) when is_integer(T), T > 0 -> T end,
-		    ?C2S_AUTH_BAN_LIFETIME),
-    MaxFailures = gen_mod:get_module_opt(
-		    LServer, ?MODULE, c2s_max_auth_failures,
-		    fun(I) when is_integer(I), I > 0 -> I end,
-		    ?C2S_MAX_AUTH_FAILURES),
-    UnbanTS = unban_timestamp(BanLifetime),
-    case ets:lookup(failed_auth, Addr) of
-	[{Addr, N, _, _}] ->
-	    ets:insert(failed_auth, {Addr, N+1, UnbanTS, MaxFailures});
-	[] ->
-	    ets:insert(failed_auth, {Addr, 1, UnbanTS, MaxFailures})
+    case is_whitelisted(LServer, Addr) of
+	true ->
+	    ok;
+	false ->
+	    BanLifetime = gen_mod:get_module_opt(
+			    LServer, ?MODULE, c2s_auth_ban_lifetime,
+			    fun(T) when is_integer(T), T > 0 -> T end,
+			    ?C2S_AUTH_BAN_LIFETIME),
+	    MaxFailures = gen_mod:get_module_opt(
+			    LServer, ?MODULE, c2s_max_auth_failures,
+			    fun(I) when is_integer(I), I > 0 -> I end,
+			    ?C2S_MAX_AUTH_FAILURES),
+	    UnbanTS = p1_time_compat:system_time(seconds) + BanLifetime,
+	    case ets:lookup(failed_auth, Addr) of
+		[{Addr, N, _, _}] ->
+		    ets:insert(failed_auth, {Addr, N+1, UnbanTS, MaxFailures});
+		[] ->
+		    ets:insert(failed_auth, {Addr, 1, UnbanTS, MaxFailures})
+	    end
     end;
 c2s_auth_result(true, _User, _Server, _AddrPort) ->
     ok.
@@ -74,11 +79,11 @@ c2s_auth_result(true, _User, _Server, _AddrPort) ->
 check_bl_c2s(_Acc, Addr, Lang) ->
     case ets:lookup(failed_auth, Addr) of
 	[{Addr, N, TS, MaxFailures}] when N >= MaxFailures ->
-	    case TS > now() of
+	    case TS > p1_time_compat:system_time(seconds) of
 		true ->
 		    IP = jlib:ip_to_list(Addr),
 		    UnbanDate = format_date(
-				    calendar:now_to_universal_time(TS)),
+				    calendar:now_to_universal_time(seconds_to_now(TS))),
 		    LogReason = io_lib:fwrite(
 				  "Too many (~p) failed authentications "
 				  "from this IP address (~s). The address "
@@ -134,7 +139,7 @@ handle_cast(_Msg, State) ->
 
 handle_info(clean, State) ->
     ?DEBUG("cleaning ~p ETS table", [failed_auth]),
-    Now = now(),
+    Now = p1_time_compat:system_time(seconds),
     ets:select_delete(
       failed_auth,
       ets:fun2ms(fun({_, _, UnbanTS, _}) -> UnbanTS =< Now end)),
@@ -160,10 +165,11 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-unban_timestamp(BanLifetime) ->
-    {MegaSecs, MSecs, USecs} = now(),
-    UnbanSecs = MegaSecs * 1000000 + MSecs + BanLifetime,
-    {UnbanSecs div 1000000, UnbanSecs rem 1000000, USecs}.
+is_whitelisted(Host, Addr) ->
+    Access = gen_mod:get_module_opt(Host, ?MODULE, access,
+				    fun(A) when is_atom(A) -> A end,
+				    none),
+    acl:match_rule(Host, Access, Addr) == allow.
 
 is_loaded_at_other_hosts(Host) ->
     lists:any(
@@ -173,6 +179,18 @@ is_loaded_at_other_hosts(Host) ->
 	      gen_mod:is_loaded(VHost, ?MODULE)
       end, ?MYHOSTS).
 
+seconds_to_now(Secs) ->
+    {Secs div 1000000, Secs rem 1000000, 0}.
+
 format_date({{Year, Month, Day}, {Hour, Minute, Second}}) ->
     io_lib:format("~2..0w:~2..0w:~2..0w ~2..0w.~2..0w.~4..0w",
 		  [Hour, Minute, Second, Day, Month, Year]).
+
+mod_opt_type(access) ->
+    fun (A) when is_atom(A) -> A end;
+mod_opt_type(c2s_auth_ban_lifetime) ->
+    fun (T) when is_integer(T), T > 0 -> T end;
+mod_opt_type(c2s_max_auth_failures) ->
+    fun (I) when is_integer(I), I > 0 -> I end;
+mod_opt_type(_) ->
+    [access, c2s_auth_ban_lifetime, c2s_max_auth_failures].

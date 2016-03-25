@@ -5,7 +5,7 @@
 %%% Created : 11 Mar 2003 by Alexey Shchepin <alexey@sevcom.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -25,9 +25,12 @@
 
 -module(cyrsasl_digest).
 
+-behaviour(ejabberd_config).
+
 -author('alexey@sevcom.net').
 
--export([start/1, stop/0, mech_new/4, mech_step/2, parse/1]).
+-export([start/1, stop/0, mech_new/4, mech_step/2,
+	 parse/1, opt_type/1]).
 
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -47,7 +50,7 @@
                 username = <<"">> :: binary(),
                 authzid = <<"">> :: binary(),
                 get_password = fun(_) -> {false, <<>>} end :: get_password_fun(),
-                check_password = fun(_, _, _, _) -> false end :: check_password_fun(),
+                check_password = fun(_, _, _, _, _) -> false end :: check_password_fun(),
                 auth_module :: atom(),
                 host = <<"">> :: binary(),
                 hostfqdn = <<"">> :: binary()}).
@@ -80,9 +83,7 @@ mech_step(#state{step = 3, nonce = Nonce} = State,
       bad -> {error, <<"bad-protocol">>};
       KeyVals ->
 	  DigestURI = proplists:get_value(<<"digest-uri">>, KeyVals, <<>>),
-	  %DigestURI = xml:get_attr_s(<<"digest-uri">>, KeyVals),
 	  UserName = proplists:get_value(<<"username">>, KeyVals, <<>>),
-	  %UserName = xml:get_attr_s(<<"username">>, KeyVals),
 	  case is_digesturi_valid(DigestURI, State#state.host,
 				  State#state.hostfqdn)
 	      of
@@ -94,13 +95,11 @@ mech_step(#state{step = 3, nonce = Nonce} = State,
 		{error, <<"not-authorized">>, UserName};
 	    true ->
 		AuthzId = proplists:get_value(<<"authzid">>, KeyVals, <<>>),
-		%AuthzId = xml:get_attr_s(<<"authzid">>, KeyVals),
 		case (State#state.get_password)(UserName) of
 		  {false, _} -> {error, <<"not-authorized">>, UserName};
 		  {Passwd, AuthModule} ->
-		      case (State#state.check_password)(UserName, <<"">>,
+		      case (State#state.check_password)(UserName, UserName, <<"">>,
 		                    proplists:get_value(<<"response">>, KeyVals, <<>>),
-							%xml:get_attr_s(<<"response">>, KeyVals),
 							fun (PW) ->
 								response(KeyVals,
 									 UserName,
@@ -127,7 +126,11 @@ mech_step(#state{step = 5, auth_module = AuthModule,
 		 username = UserName, authzid = AuthzId},
 	  <<"">>) ->
     {ok,
-     [{username, UserName}, {authzid, AuthzId},
+     [{username, UserName}, {authzid, case AuthzId of
+        <<"">> -> UserName;
+        _ -> AuthzId
+      end
+    },
       {auth_module, AuthModule}]};
 mech_step(A, B) ->
     ?DEBUG("SASL DIGEST: A ~p B ~p", [A, B]),
@@ -256,3 +259,6 @@ response(KeyVals, User, Passwd, Nonce, AuthzId,
 	  ":", NC/binary, ":", CNonce/binary, ":", QOP/binary,
 	  ":", (hex((erlang:md5(A2))))/binary>>,
     hex((erlang:md5(T))).
+
+opt_type(fqdn) -> fun iolist_to_binary/1;
+opt_type(_) -> [fqdn].

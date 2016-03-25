@@ -5,7 +5,7 @@
 %%% Created : 12 Dec 2004 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -25,20 +25,21 @@
 
 -module(ejabberd_auth_external).
 
+-behaviour(ejabberd_config).
+
 -author('alexey@process-one.net').
 
 -behaviour(ejabberd_auth).
 
-%% External exports
--export([start/1, set_password/3, check_password/3,
-	 check_password/5, try_register/3,
+-export([start/1, set_password/3, check_password/4,
+	 check_password/6, try_register/3,
 	 dirty_get_registered_users/0, get_vh_registered_users/1,
 	 get_vh_registered_users/2,
 	 get_vh_registered_users_number/1,
 	 get_vh_registered_users_number/2, get_password/2,
 	 get_password_s/2, is_user_exists/2, remove_user/2,
-	 remove_user/3, store_type/0,
-	 plain_password_required/0]).
+	 remove_user/3, store_type/0, plain_password_required/0,
+	 opt_type/1]).
 
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -75,16 +76,20 @@ plain_password_required() -> true.
 
 store_type() -> external.
 
-check_password(User, Server, Password) ->
+check_password(User, AuthzId, Server, Password) ->
+    if AuthzId /= <<>> andalso AuthzId /= User ->
+        false;
+    true ->
     case get_cache_option(Server) of
-      false -> check_password_extauth(User, Server, Password);
+          false -> check_password_extauth(User, AuthzId, Server, Password);
       {true, CacheTime} ->
-	  check_password_cache(User, Server, Password, CacheTime)
+    	  check_password_cache(User, AuthzId, Server, Password, CacheTime)
+        end
     end.
 
-check_password(User, Server, Password, _Digest,
+check_password(User, AuthzId, Server, Password, _Digest,
 	       _DigestGen) ->
-    check_password(User, Server, Password).
+    check_password(User, AuthzId, Server, Password).
 
 set_password(User, Server, Password) ->
     case extauth:set_password(User, Server, Password) of
@@ -177,8 +182,8 @@ get_cache_option(Host) ->
         CacheTime -> {true, CacheTime}
     end.
 
-%% @spec (User, Server, Password) -> true | false
-check_password_extauth(User, Server, Password) ->
+%% @spec (User, AuthzId, Server, Password) -> true | false
+check_password_extauth(User, _AuthzId, Server, Password) ->
     extauth:check_password(User, Server, Password) andalso
       Password /= <<"">>.
 
@@ -186,42 +191,42 @@ check_password_extauth(User, Server, Password) ->
 try_register_extauth(User, Server, Password) ->
     extauth:try_register(User, Server, Password).
 
-check_password_cache(User, Server, Password, 0) ->
-    check_password_external_cache(User, Server, Password);
-check_password_cache(User, Server, Password,
+check_password_cache(User, AuthzId, Server, Password, 0) ->
+    check_password_external_cache(User, AuthzId, Server, Password);
+check_password_cache(User, AuthzId, Server, Password,
 		     CacheTime) ->
     case get_last_access(User, Server) of
       online ->
-	  check_password_internal(User, Server, Password);
+	  check_password_internal(User, AuthzId, Server, Password);
       never ->
-	  check_password_external_cache(User, Server, Password);
+	  check_password_external_cache(User, AuthzId, Server, Password);
       mod_last_required ->
 	  ?ERROR_MSG("extauth is used, extauth_cache is enabled "
 		     "but mod_last is not enabled in that "
 		     "host",
 		     []),
-	  check_password_external_cache(User, Server, Password);
+	  check_password_external_cache(User, AuthzId, Server, Password);
       TimeStamp ->
 	  case is_fresh_enough(TimeStamp, CacheTime) of
 	    %% If no need to refresh, check password against Mnesia
 	    true ->
-		case check_password_internal(User, Server, Password) of
+		case check_password_internal(User, AuthzId, Server, Password) of
 		  %% If password valid in Mnesia, accept it
 		  true -> true;
 		  %% Else (password nonvalid in Mnesia), check in extauth and cache result
 		  false ->
-		      check_password_external_cache(User, Server, Password)
+		      check_password_external_cache(User, AuthzId, Server, Password)
 		end;
 	    %% Else (need to refresh), check in extauth and cache result
 	    false ->
-		check_password_external_cache(User, Server, Password)
+		check_password_external_cache(User, AuthzId, Server, Password)
 	  end
     end.
 
 get_password_internal(User, Server) ->
     ejabberd_auth_internal:get_password(User, Server).
 
-%% @spec (User, Server, CacheTime) -> false | Password::string()
+-spec get_password_cache(User::binary(), Server::binary(), CacheTime::integer()) -> Password::string() | false.
 get_password_cache(User, Server, CacheTime) ->
     case get_last_access(User, Server) of
       online -> get_password_internal(User, Server);
@@ -240,8 +245,8 @@ get_password_cache(User, Server, CacheTime) ->
     end.
 
 %% Check the password using extauth; if success then cache it
-check_password_external_cache(User, Server, Password) ->
-    case check_password_extauth(User, Server, Password) of
+check_password_external_cache(User, AuthzId, Server, Password) ->
+    case check_password_extauth(User, AuthzId, Server, Password) of
       true ->
 	  set_password_internal(User, Server, Password), true;
       false -> false
@@ -255,9 +260,9 @@ try_register_external_cache(User, Server, Password) ->
       _ -> {error, not_allowed}
     end.
 
-%% @spec (User, Server, Password) -> true | false
-check_password_internal(User, Server, Password) ->
-    ejabberd_auth_internal:check_password(User, Server,
+%% @spec (User, AuthzId, Server, Password) -> true | false
+check_password_internal(User, AuthzId, Server, Password) ->
+    ejabberd_auth_internal:check_password(User, AuthzId, Server,
 					  Password).
 
 %% @spec (User, Server, Password) -> ok | {error, invalid_jid}
@@ -269,18 +274,16 @@ set_password_internal(User, Server, Password) ->
 					Password).
 
 is_fresh_enough(TimeStampLast, CacheTime) ->
-    {MegaSecs, Secs, _MicroSecs} = now(),
-    Now = MegaSecs * 1000000 + Secs,
+    Now = p1_time_compat:system_time(seconds),
     TimeStampLast + CacheTime > Now.
 
-%% @spec (User, Server) -> online | never | mod_last_required | TimeStamp::integer()
 %% Code copied from mod_configure.erl
 %% Code copied from web/ejabberd_web_admin.erl
 %% TODO: Update time format to XEP-0202: Entity Time
+-spec(get_last_access(User::binary(), Server::binary()) -> (online | never | mod_last_required | integer())).
 get_last_access(User, Server) ->
     case ejabberd_sm:get_user_resources(User, Server) of
       [] ->
-	  _US = {User, Server},
 	  case get_last_info(User, Server) of
 	    mod_last_required -> mod_last_required;
 	    not_found -> never;
@@ -310,4 +313,14 @@ get_mod_last_configured(Server) ->
     end.
 
 is_configured(Host, Module) ->
-    gen_mod:is_loaded(Host, Module).
+    Os = ejabberd_config:get_local_option({modules, Host},
+					  fun(M) when is_list(M) -> M end),
+    lists:keymember(Module, 1, Os).
+
+opt_type(extauth_cache) ->
+    fun (false) -> undefined;
+	(I) when is_integer(I), I >= 0 -> I
+    end;
+opt_type(extauth_program) ->
+    fun (V) -> binary_to_list(iolist_to_binary(V)) end;
+opt_type(_) -> [extauth_cache, extauth_program].

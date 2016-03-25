@@ -5,7 +5,7 @@
 %%% Created : 14 Dec 2002 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -36,13 +36,16 @@
          prepare_opt_val/4, convert_table_to_binary/5,
          transform_options/1, collect_options/1,
          convert_to_yaml/1, convert_to_yaml/2,
-         env_binary_to_list/2]).
+         env_binary_to_list/2, opt_type/1, may_hide_data/1]).
+
+-export([start/2]).
 
 -include("ejabberd.hrl").
 -include("logger.hrl").
 -include("ejabberd_config.hrl").
 -include_lib("kernel/include/file.hrl").
 
+-callback opt_type(atom()) -> function() | [atom()].
 
 %% @type macro() = {macro_key(), macro_value()}
 
@@ -51,8 +54,48 @@
 
 %% @type macro_value() = term().
 
-
 start() ->
+    mnesia_init(),
+    Config = get_ejabberd_config_path(),
+    State0 = read_file(Config),
+    State1 = hosts_to_start(State0),
+    State2 = validate_opts(State1),
+    %% This start time is used by mod_last:
+    UnixTime = p1_time_compat:system_time(seconds),
+    SharedKey = case erlang:get_cookie() of
+                    nocookie ->
+                        p1_sha:sha(randoms:get_string());
+                    Cookie ->
+                        p1_sha:sha(jlib:atom_to_binary(Cookie))
+                end,
+    State3 = set_option({node_start, global}, UnixTime, State2),
+    State4 = set_option({shared_key, global}, SharedKey, State3),
+    set_opts(State4).
+
+%% When starting ejabberd for testing, we sometimes want to start a
+%% subset of hosts from the one define in the config file.
+%% This function override the host list read from config file by the
+%% one we provide.
+%% Hosts to start are defined in an ejabberd application environment
+%% variable 'hosts' to make it easy to ignore some host in config
+%% file.
+hosts_to_start(State) ->
+    case application:get_env(ejabberd, hosts) of
+        undefined ->
+            %% Start all hosts as defined in config file
+            State;
+        {ok, Hosts} ->
+            set_hosts_in_options(Hosts, State)
+    end.
+
+%% @private
+%% At the moment, these functions are mainly used to setup unit tests.
+-spec(start/2 :: (Hosts :: [binary()], Opts :: [acl:acl() | local_config()]) -> ok).
+start(Hosts, Opts) ->
+    mnesia_init(),
+    set_opts(#state{hosts = Hosts, opts = Opts}).
+
+mnesia_init() ->
     case catch mnesia:table_info(local_config, storage_type) of
         disc_copies ->
             mnesia:delete_table(local_config);
@@ -63,21 +106,7 @@ start() ->
 			[{ram_copies, [node()]},
 			 {local_content, true},
 			 {attributes, record_info(fields, local_config)}]),
-    mnesia:add_table_copy(local_config, node(), ram_copies),
-    Config = get_ejabberd_config_path(),
-    State = read_file(Config),
-    %% This start time is used by mod_last:
-    {MegaSecs, Secs, _} = now(),
-    UnixTime = MegaSecs*1000000 + Secs,
-    SharedKey = case erlang:get_cookie() of
-                    nocookie ->
-                        p1_sha:sha(randoms:get_string());
-                    Cookie ->
-                        p1_sha:sha(jlib:atom_to_binary(Cookie))
-                end,
-    State1 = set_option({node_start, global}, UnixTime, State),
-    State2 = set_option({shared_key, global}, SharedKey, State1),
-    set_opts(State2).
+    mnesia:add_table_copy(local_config, node(), ram_copies).
 
 %% @doc Get the filename of the ejabberd configuration file.
 %% The filename can be specified with: erl -config "/path/to/ejabberd.yml".
@@ -111,10 +140,11 @@ get_env_config() ->
 %% @doc Read the ejabberd configuration file.
 %% It also includes additional configuration files and replaces macros.
 %% This function will crash if finds some error in the configuration file.
-%% @spec (File::string()) -> #state{}.
+%% @spec (File::string()) -> #state{}
 read_file(File) ->
     read_file(File, [{replace_macros, true},
-                     {include_files, true}]).
+                     {include_files, true},
+                     {include_modules_configs, true}]).
 
 read_file(File, Opts) ->
     Terms1 = get_plain_terms_file(File, Opts),
@@ -160,7 +190,7 @@ convert_to_yaml(File, Output) ->
                          fun({Host, Opts1}) ->
                                  {host_config, [{Host, Opts1}]}
                          end, HOpts),
-    Data = p1_yaml:encode(lists:reverse(NewOpts)),
+    Data = fast_yaml:encode(lists:reverse(NewOpts)),
     case Output of
         stdout ->
             io:format("~s~n", [Data]);
@@ -189,7 +219,6 @@ env_binary_to_list(Application, Parameter) ->
 %% Returns a list of plain terms,
 %% in which the options 'include_config_file' were parsed
 %% and the terms in those files were included.
-%% @spec(string()) -> [term()]
 %% @spec(iolist()) -> [term()]
 get_plain_terms_file(File) ->
     get_plain_terms_file(File, [{include_files, true}]).
@@ -200,7 +229,17 @@ get_plain_terms_file(File1, Opts) ->
     File = get_absolute_path(File1),
     case consult(File) of
 	{ok, Terms} ->
-            BinTerms = strings_to_binary(Terms),
+            BinTerms1 = strings_to_binary(Terms),
+            ModInc = case proplists:get_bool(include_modules_configs, Opts) of
+                         true ->
+                            Files = [{filename:rootname(filename:basename(F)), F}
+                                     || F <- filelib:wildcard(ext_mod:config_dir() ++ "/*.{yml,yaml}")
+                                          ++ filelib:wildcard(ext_mod:modules_dir() ++ "/*/conf/*.{yml,yaml}")],
+                            [proplists:get_value(F,Files) || F <- proplists:get_keys(Files)];
+                         _ ->
+                            []
+                     end,
+            BinTerms = BinTerms1 ++ [{include_config_file, list_to_binary(V)} || V <- ModInc],
             case proplists:get_bool(include_files, Opts) of
                 true ->
                     include_config_files(BinTerms);
@@ -215,14 +254,14 @@ get_plain_terms_file(File1, Opts) ->
 consult(File) ->
     case filename:extension(File) of
         Ex when (Ex == ".yml") or (Ex == ".yaml") ->
-            case p1_yaml:decode_from_file(File, [plain_as_atom]) of
+            case fast_yaml:decode_from_file(File, [plain_as_atom]) of
                 {ok, []} ->
                     {ok, []};
                 {ok, [Document|_]} ->
                     {ok, parserl(Document)};
                 {error, Err} ->
                     Msg1 = "Cannot load " ++ File ++ ": ",
-                    Msg2 = p1_yaml:format_error(Err),
+                    Msg2 = fast_yaml:format_error(Err),
                     {error, Msg1 ++ Msg2}
             end;
         _ ->
@@ -266,7 +305,7 @@ search_hosts(Term, State) ->
 	{host, Host} ->
 	    if
 		State#state.hosts == [] ->
-		    add_hosts_to_option([Host], State);
+		    set_hosts_in_options([Host], State);
 		true ->
 		    ?ERROR_MSG("Can't load config file: "
 			       "too many hosts definitions", []),
@@ -275,7 +314,7 @@ search_hosts(Term, State) ->
 	{hosts, Hosts} ->
 	    if
 		State#state.hosts == [] ->
-		    add_hosts_to_option(Hosts, State);
+		    set_hosts_in_options(Hosts, State);
 		true ->
 		    ?ERROR_MSG("Can't load config file: "
 			       "too many hosts definitions", []),
@@ -285,16 +324,19 @@ search_hosts(Term, State) ->
 	    State
     end.
 
-add_hosts_to_option(Hosts, State) ->
+set_hosts_in_options(Hosts, State) ->
     PrepHosts = normalize_hosts(Hosts),
-    set_option({hosts, global}, PrepHosts, State#state{hosts = PrepHosts}).
+    NewOpts = lists:filter(fun({local_config,{hosts,global},_}) -> false;
+                               (_) -> true
+                            end, State#state.opts),
+    set_option({hosts, global}, PrepHosts, State#state{hosts = PrepHosts, opts = NewOpts}).
 
 normalize_hosts(Hosts) ->
     normalize_hosts(Hosts,[]).
 normalize_hosts([], PrepHosts) ->
     lists:reverse(PrepHosts);
 normalize_hosts([Host|Hosts], PrepHosts) ->
-    case jlib:nodeprep(iolist_to_binary(Host)) of
+    case jid:nodeprep(iolist_to_binary(Host)) of
 	error ->
 	    ?ERROR_MSG("Can't load config file: "
 		       "invalid host name [~p]", [Host]),
@@ -358,6 +400,62 @@ exit_or_halt(ExitText) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% Support for 'include_config_file'
 
+get_config_option_key(Name, Val) ->
+    if Name == listen ->
+            case Val of
+                {{Port, IP, Trans}, _Mod, _Opts} ->
+                    {Port, IP, Trans};
+                {{Port, Trans}, _Mod, _Opts} when Trans == tcp; Trans == udp ->
+                    {Port, {0,0,0,0}, Trans};
+                {{Port, IP}, _Mod, _Opts} ->
+                    {Port, IP, tcp};
+                {Port, _Mod, _Opts} ->
+                    {Port, {0,0,0,0}, tcp};
+                V when is_list(V) ->
+                    lists:foldl(
+                      fun({port, Port}, {_, IP, T}) ->
+                              {Port, IP, T};
+                         ({ip, IP}, {Port, _, T}) ->
+                              {Port, IP, T};
+                         ({transport, T}, {Port, IP, _}) ->
+                              {Port, IP, T};
+                         (_, Res) ->
+                              Res
+                      end, {5222, {0,0,0,0}, tcp}, Val)
+            end;
+       is_tuple(Val) ->
+            element(1, Val);
+       true ->
+            Val
+    end.
+
+maps_to_lists(IMap) ->
+    maps:fold(fun(Name, Map, Res) when Name == host_config orelse Name == append_host_config ->
+                      [{Name, [{Host, maps_to_lists(SMap)} || {Host,SMap} <- maps:values(Map)]} | Res];
+                 (Name, Map, Res) when is_map(Map) ->
+                      [{Name, maps:values(Map)} | Res];
+                 (Name, Val, Res) ->
+                      [{Name, Val} | Res]
+              end, [], IMap).
+
+merge_configs(Terms, ResMap) ->
+    lists:foldl(fun({Name, Val}, Map) when is_list(Val), Name =/= auth_method ->
+                        Old = maps:get(Name, Map, #{}),
+                        New = lists:foldl(fun(SVal, OMap) ->
+                                                  NVal = if Name == host_config orelse Name == append_host_config ->
+                                                                 {Host, Opts} = SVal,
+                                                                 {_, SubMap} = maps:get(Host, OMap, {Host, #{}}),
+                                                                 {Host, merge_configs(Opts, SubMap)};
+                                                            true ->
+                                                                 SVal
+                                                         end,
+                                                  maps:put(get_config_option_key(Name, SVal), NVal, OMap)
+                                          end, Old, Val),
+                        maps:put(Name, New, Map);
+                   ({Name, Val}, Map) ->
+                        maps:put(Name, Val, Map)
+                end, ResMap, Terms).
+
 %% @doc Include additional configuration files in the list of terms.
 %% @spec ([term()]) -> [term()]
 include_config_files(Terms) ->
@@ -374,7 +472,10 @@ include_config_files(Terms) ->
                fun({File, Opts}) ->
                        include_config_file(File, Opts)
                end, lists:flatten(FileOpts)),
-    Terms1 ++ Terms2.
+
+    M1 = merge_configs(transform_terms(Terms1), #{}),
+    M2 = merge_configs(transform_terms(Terms2), M1),
+    maps_to_lists(M2).
 
 transform_include_option({include_config_file, File}) when is_list(File) ->
     case is_string(File) of
@@ -452,11 +553,11 @@ split_terms_macros(Terms) ->
     lists:foldl(
       fun(Term, {TOs, Ms}) ->
 	      case Term of
-		  {define_macro, Key, Value} -> 
+		  {define_macro, Key, Value} ->
 		      case is_correct_macro({Key, Value}) of
-			  true -> 
+			  true ->
 			      {TOs, Ms++[{Key, Value}]};
-			  false -> 
+			  false ->
 			      exit({macro_not_properly_defined, Term})
 		      end;
                   {define_macro, KeyVals} ->
@@ -686,6 +787,46 @@ get_option(Opt, F, Default) ->
             end
     end.
 
+get_modules_with_options() ->
+    {ok, Mods} = application:get_key(ejabberd, modules),
+    ExtMods = [Name || {Name, _Details} <- ext_mod:installed()],
+    lists:foldl(
+      fun(Mod, D) ->
+	      case catch Mod:opt_type('') of
+		  Opts when is_list(Opts) ->
+		      lists:foldl(
+			fun(Opt, Acc) ->
+				dict:append(Opt, Mod, Acc)
+			end, D, Opts);
+		  {'EXIT', {undef, _}} ->
+		      D
+	      end
+      end, dict:new(), [?MODULE|ExtMods++Mods]).
+
+validate_opts(#state{opts = Opts} = State) ->
+    ModOpts = get_modules_with_options(),
+    NewOpts = lists:filter(
+		fun(#local_config{key = {Opt, _Host}, value = Val}) ->
+			case dict:find(Opt, ModOpts) of
+			    {ok, [Mod|_]} ->
+				VFun = Mod:opt_type(Opt),
+				case catch VFun(Val) of
+				    {'EXIT', _} ->
+					?ERROR_MSG("ignoring option '~s' with "
+						   "invalid value: ~p",
+						   [Opt, Val]),
+					false;
+				    _ ->
+					true
+				end;
+			    _ ->
+				?ERROR_MSG("unknown option '~s' will be likely"
+					   " ignored", [Opt]),
+				true
+			end
+		end, Opts),
+    State#state{opts = NewOpts}.
+
 -spec get_vh_by_auth_method(atom()) -> [binary()].
 
 %% Return the list of hosts handled by a given module
@@ -739,20 +880,31 @@ replace_module(mod_roster_odbc) -> {mod_roster, odbc};
 replace_module(mod_shared_roster_odbc) -> {mod_shared_roster, odbc};
 replace_module(mod_vcard_odbc) -> {mod_vcard, odbc};
 replace_module(mod_vcard_xupdate_odbc) -> {mod_vcard_xupdate, odbc};
+replace_module(mod_pubsub_odbc) -> {mod_pubsub, odbc};
 replace_module(Module) ->
     case is_elixir_module(Module) of
         true  -> expand_elixir_module(Module);
         false -> Module
     end.
 
-replace_modules(Modules) -> lists:map( fun({Module, Opts}) -> case
-    replace_module(Module) of {NewModule, DBType} ->
-    emit_deprecation_warning(Module, NewModule, DBType), NewOpts =
-    [{db_type, DBType} | lists:keydelete(db_type, 1, Opts)],
-    {NewModule, transform_module_options(Module, NewOpts)}; NewModule
-    -> if Module /= NewModule -> emit_deprecation_warning(Module,
-    NewModule); true -> ok end, {NewModule,
-    transform_module_options(Module, Opts)} end end, Modules).
+replace_modules(Modules) ->
+    lists:map(
+        fun({Module, Opts}) ->
+                case replace_module(Module) of
+                    {NewModule, DBType} ->
+                        emit_deprecation_warning(Module, NewModule, DBType),
+                        NewOpts = [{db_type, DBType} |
+                                   lists:keydelete(db_type, 1, Opts)],
+                        {NewModule, transform_module_options(Module, NewOpts)};
+                    NewModule ->
+                        if Module /= NewModule ->
+                                emit_deprecation_warning(Module, NewModule);
+                           true ->
+                                ok
+                        end,
+                        {NewModule, transform_module_options(Module, Opts)}
+                end
+        end, Modules).
 
 %% Elixir module naming
 %% ====================
@@ -1061,4 +1213,34 @@ emit_deprecation_warning(Module, NewModule) ->
         false ->
             ?WARNING_MSG("Module ~s is deprecated, use ~s instead",
                          [Module, NewModule])
+    end.
+
+opt_type(hide_sensitive_log_data) ->
+    fun (H) when is_boolean(H) -> H end;
+opt_type(hosts) ->
+    fun(L) when is_list(L) ->
+	    lists:map(
+	      fun(H) ->
+		      iolist_to_binary(H)
+	      end, L)
+    end;
+opt_type(language) ->
+    fun iolist_to_binary/1;
+opt_type(_) ->
+    [hide_sensitive_log_data, hosts, language].
+
+-spec may_hide_data(string()) -> string();
+                   (binary()) -> binary().
+
+may_hide_data(Data) ->
+    case ejabberd_config:get_option(
+	hide_sensitive_log_data,
+	    fun(false) -> false;
+	       (true) -> true
+	    end,
+        false) of
+	false ->
+	    Data;
+	true ->
+	    "hidden_by_ejabberd"
     end.

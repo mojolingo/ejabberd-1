@@ -1,12 +1,12 @@
 %%%-------------------------------------------------------------------
 %%% @author Evgeny Khramtsov <ekhramtsov@process-one.net>
-%%% @copyright (C) 2014, Evgeny Khramtsov
 %%% @doc
 %%%
 %%% @end
 %%% Created : 23 Apr 2014 by Evgeny Khramtsov <ekhramtsov@process-one.net>
 %%%
-%%% ejabberd, Copyright (C) 2014-2015   ProcessOne
+%%%
+%%% ejabberd, Copyright (C) 2014-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -48,7 +48,7 @@
 		      socket = #sip_socket{} :: #sip_socket{},
 		      call_id = <<"">> :: binary(),
 		      cseq = 0 :: non_neg_integer(),
-		      timestamp = now() :: erlang:timestamp(),
+		      timestamp = p1_time_compat:timestamp() :: erlang:timestamp(),
 		      contact :: {binary(), #uri{}, [{binary(), binary()}]},
 		      flow_tref :: reference(),
 		      reg_tref = make_ref() :: reference(),
@@ -65,8 +65,8 @@ start_link() ->
 
 request(#sip{hdrs = Hdrs} = Req, SIPSock) ->
     {_, #uri{user = U, host = S}, _} = esip:get_hdr('to', Hdrs),
-    LUser = jlib:nodeprep(U),
-    LServer = jlib:nameprep(S),
+    LUser = jid:nodeprep(U),
+    LServer = jid:nameprep(S),
     {PeerIP, _} = SIPSock#sip_socket.peer,
     US = {LUser, LServer},
     CallID = esip:get_hdr('call-id', Hdrs),
@@ -242,7 +242,7 @@ register_session(US, SIPSocket, CallID, CSeq, IsOutboundSupported,
 				      socket = SIPSocket,
 				      call_id = CallID,
 				      cseq = CSeq,
-				      timestamp = now(),
+				      timestamp = p1_time_compat:timestamp(),
 				      contact = Contact,
 				      expires = Expires}
 		 end, ContactsWithExpires),
@@ -490,15 +490,18 @@ need_ob_hdrs(Contacts, _IsOutboundSupported = true) ->
       end, Contacts).
 
 get_flow_timeout(LServer, #sip_socket{type = Type}) ->
-    {Option, Default} =
-	case Type of
-	    udp -> {flow_timeout_udp, ?FLOW_TIMEOUT_UDP};
-	    _ -> {flow_timeout_tcp, ?FLOW_TIMEOUT_TCP}
-	end,
-    gen_mod:get_module_opt(
-      LServer, mod_sip, Option,
-      fun(I) when is_integer(I), I>0 -> I end,
-      Default).
+    case Type of
+	udp ->
+	    gen_mod:get_module_opt(
+	      LServer, mod_sip, flow_timeout_udp,
+	      fun(I) when is_integer(I), I>0 -> I end,
+	      ?FLOW_TIMEOUT_UDP);
+	_ ->
+	    gen_mod:get_module_opt(
+	      LServer, mod_sip, flow_timeout_tcp,
+	      fun(I) when is_integer(I), I>0 -> I end,
+	      ?FLOW_TIMEOUT_TCP)
+    end.
 
 update_table() ->
     Fields = record_info(fields, sip_session),

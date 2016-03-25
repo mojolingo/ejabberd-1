@@ -5,7 +5,7 @@
 %%% Created : 18 Jan 2003 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -25,11 +25,14 @@
 
 -module(acl).
 
+-behaviour(ejabberd_config).
+
 -author('alexey@process-one.net').
 
 -export([start/0, to_record/3, add/3, add_list/3,
-         add_local/3, add_list_local/3, load_from_config/0,
-	 match_rule/3, match_acl/3, transform_options/1]).
+	 add_local/3, add_list_local/3, load_from_config/0,
+	 match_rule/3, match_acl/3, transform_options/1,
+	 opt_type/1]).
 
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -95,7 +98,7 @@ to_record(Host, ACLName, ACLSpec) ->
 -spec add(binary(), aclname(), aclspec()) -> ok | {error, any()}.
 
 add(Host, ACLName, ACLSpec) ->
-    {ResL, BadNodes} = rpc:multicall(mnesia:system_info(running_db_nodes),
+    {ResL, BadNodes} = ejabberd_cluster:multicall(
                                      ?MODULE, add_local,
                                      [Host, ACLName, ACLSpec]),
     case lists:keyfind(aborted, 1, ResL) of
@@ -122,7 +125,7 @@ add_local(Host, ACLName, ACLSpec) ->
 -spec add_list(binary(), [acl()], boolean()) -> ok | {error, any()}.
 
 add_list(Host, ACLs, Clear) ->
-    {ResL, BadNodes} = rpc:multicall(mnesia:system_info(running_db_nodes),
+    {ResL, BadNodes} = ejabberd_cluster:multicall(
                                      ?MODULE, add_list_local,
                                      [Host, ACLs, Clear]),
     case lists:keyfind(aborted, 1, ResL) of
@@ -164,16 +167,12 @@ add_list_local(Host, ACLs, Clear) ->
                  access_name(), [access_rule()]) ->  ok | {error, any()}.
 
 add_access(Host, Access, Rules) ->
-    case mnesia:transaction(
-           fun() ->
-                   mnesia:write(
-                     #access{name = {Access, Host},
-                             rules = Rules})
-           end) of
-        {atomic, ok} ->
-            ok;
-        Err ->
-            {error, Err}
+    Obj = #access{name = {Access, Host}, rules = Rules},
+    case mnesia:transaction(fun() -> mnesia:write(Obj) end) of
+	{atomic, ok} ->
+	    ok;
+	Err ->
+	    {error, Err}
     end.
 
 -spec load_from_config() -> ok.
@@ -209,13 +208,13 @@ b(S) ->
     iolist_to_binary(S).
 
 nodeprep(S) ->
-    jlib:nodeprep(b(S)).
+    jid:nodeprep(b(S)).
 
 nameprep(S) ->
-    jlib:nameprep(b(S)).
+    jid:nameprep(b(S)).
 
 resourceprep(S) ->
-    jlib:resourceprep(b(S)).
+    jid:resourceprep(b(S)).
 
 normalize_spec(Spec) ->
     case Spec of
@@ -236,8 +235,7 @@ normalize_spec(Spec) ->
         {server_regexp, SR} -> {server_regexp, b(SR)};
         {server_glob, S} -> {server_glob, b(S)};
         {resource_glob, R} -> {resource_glob, b(R)};
-        {ip, {Net, Mask}} ->
-            {ip, {Net, Mask}};
+        {ip, {Net, Mask}} -> {ip, {Net, Mask}};
         {ip, S} ->
             case parse_ip_netmask(b(S)) of
                 {ok, Net, Mask} ->
@@ -295,11 +293,9 @@ match_acl(ACL, IP, Host) when tuple_size(IP) == 4;
               is_ip_match(IP, Net, Mask);
          (_) ->
               false
-      end,
-      ets:lookup(acl, {ACL, Host}) ++
-          ets:lookup(acl, {ACL, global}));
+      end, get_aclspecs(ACL, Host));
 match_acl(ACL, JID, Host) ->
-    {User, Server, Resource} = jlib:jid_tolower(JID),
+    {User, Server, Resource} = jid:tolower(JID),
     lists:any(
       fun(#acl{aclspec = Spec}) ->
               case Spec of
@@ -347,8 +343,10 @@ match_acl(ACL, JID, Host) ->
                       false
               end
       end,
-      ets:lookup(acl, {ACL, Host}) ++
-          ets:lookup(acl, {ACL, global})).
+      get_aclspecs(ACL, Host)).
+
+get_aclspecs(ACL, Host) ->
+      ets:lookup(acl, {ACL, Host}) ++ ets:lookup(acl, {ACL, global}).
 
 is_regexp_match(String, RegExp) ->
     case ejabberd_regexp:run(String, RegExp) of
@@ -476,3 +474,7 @@ transform_options({access, Name, Rules}, Opts) ->
     [{access, [{Name, NewRules}]}|Opts];
 transform_options(Opt, Opts) ->
     [Opt|Opts].
+
+opt_type(access) -> fun (V) -> V end;
+opt_type(acl) -> fun (V) -> V end;
+opt_type(_) -> [access, acl].

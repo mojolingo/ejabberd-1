@@ -5,7 +5,7 @@
 %%% Created : 09-10-2010 by Eric Cestari <ecestari@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -24,16 +24,17 @@
 %%%----------------------------------------------------------------------
 -module(ejabberd_http_ws).
 
+-behaviour(ejabberd_config).
+
 -author('ecestari@process-one.net').
 
 -behaviour(gen_fsm).
 
-% External exports
 -export([start/1, start_link/1, init/1, handle_event/3,
 	 handle_sync_event/4, code_change/4, handle_info/3,
-	 terminate/3, send_xml/2, setopts/2, sockname/1, peername/1,
-	 controlling_process/2, become_controller/2, close/1,
-	 socket_handoff/6]).
+	 terminate/3, send_xml/2, setopts/2, sockname/1,
+	 peername/1, controlling_process/2, become_controller/2,
+	 close/1, socket_handoff/6, opt_type/1]).
 
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -74,7 +75,7 @@
 -export_type([ws_socket/0]).
 
 start(WS) ->
-    supervisor:start_child(ejabberd_wsloop_sup, [WS]).
+    gen_fsm:start(?MODULE, [WS], ?FSMOPTS).
 
 start_link(WS) ->
     gen_fsm:start_link(?MODULE, [WS], ?FSMOPTS).
@@ -110,8 +111,15 @@ socket_handoff(LocalPath, Request, Socket, SockMod, Buf, Opts) ->
 
 %%% Internal
 
-init([{#ws{ip = IP}, _} = WS]) ->
-    Opts = [{xml_socket, true} | ejabberd_c2s_config:get_c2s_limits()],
+init([{#ws{ip = IP, http_opts = HOpts}, _} = WS]) ->
+    SOpts = lists:filtermap(fun({stream_managment, _}) -> true;
+                               ({max_ack_queue, _}) -> true;
+                               ({resume_timeout, _}) -> true;
+                               ({max_resume_timeout, _}) -> true;
+                               ({resend_on_timeout, _}) -> true;
+                               (_) -> false
+                            end, HOpts),
+    Opts = [{xml_socket, true} | ejabberd_c2s_config:get_c2s_limits() ++ SOpts],
     PingInterval = ejabberd_config:get_option(
                      {websocket_ping_interval, ?MYNAME},
                      fun(I) when is_integer(I), I>=0 -> I end,
@@ -138,8 +146,10 @@ handle_event({activate, From}, StateName, StateData) ->
              StateData#state{waiting_input = From}};
       Input ->
             Receiver = From,
-            lists:foreach(fun(I) ->
-                                  Receiver ! {tcp, StateData#state.socket, I}
+            lists:foreach(fun(I) when is_binary(I)->
+                                  Receiver ! {tcp, StateData#state.socket, I};
+                             (I2) ->
+                                  Receiver ! {tcp, StateData#state.socket, [I2]}
                           end, Input),
             {next_state, StateName,
              StateData#state{input = [], waiting_input = false,
@@ -161,11 +171,11 @@ handle_sync_event({send_xml, Packet}, _From, StateName,
                   {true, {xmlstreamelement, #xmlel{name=Name2} = El2}} ->
                       El3 = case Name2 of
                                 <<"stream:", _/binary>> ->
-                                    xml:replace_tag_attr(<<"xmlns:stream">>, ?NS_STREAM, El2);
+                                    fxml:replace_tag_attr(<<"xmlns:stream">>, ?NS_STREAM, El2);
                                 _ ->
-                                    case xml:get_tag_attr_s(<<"xmlns">>, El2) of
+                                    case fxml:get_tag_attr_s(<<"xmlns">>, El2) of
                                         <<"">> ->
-                                            xml:replace_tag_attr(<<"xmlns">>, <<"jabber:client">>, El2);
+                                            fxml:replace_tag_attr(<<"xmlns">>, <<"jabber:client">>, El2);
                                         _ ->
                                             El2
                                     end
@@ -176,12 +186,12 @@ handle_sync_event({send_xml, Packet}, _From, StateName,
               end,
     case Packet2 of
         {xmlstreamstart, Name, Attrs3} ->
-            B = xml:element_to_binary(#xmlel{name = Name, attrs = Attrs3}),
+            B = fxml:element_to_binary(#xmlel{name = Name, attrs = Attrs3}),
             WsPid ! {send, <<(binary:part(B, 0, byte_size(B)-2))/binary, ">">>};
         {xmlstreamend, Name} ->
             WsPid ! {send, <<"</", Name/binary, ">">>};
         {xmlstreamelement, El} ->
-            WsPid ! {send, xml:element_to_binary(El)};
+            WsPid ! {send, fxml:element_to_binary(El)};
         {xmlstreamraw, Bin} ->
             WsPid ! {send, Bin};
         {xmlstreamcdata, Bin2} ->
@@ -200,7 +210,7 @@ handle_sync_event(close, _From, StateName, #state{ws = {_, WsPid}, rfc_compilant
   when StateName /= stream_end_sent ->
     Close = #xmlel{name = <<"close">>,
                    attrs = [{<<"xmlns">>, <<"urn:ietf:params:xml:ns:xmpp-framing">>}]},
-    WsPid ! {send, xml:element_to_binary(Close)},
+    WsPid ! {send, fxml:element_to_binary(Close)},
     {stop, normal, StateData};
 handle_sync_event(close, _From, _StateName, StateData) ->
     {stop, normal, StateData}.
@@ -260,10 +270,9 @@ setup_timers(StateData) ->
     Timer = erlang:start_timer(StateData#state.timeout,
                                self(), []),
     cancel_timer(StateData#state.ping_timer),
-    PingTimer = case {StateData#state.ping_interval, StateData#state.rfc_compilant} of
-                    {0, _} -> StateData#state.ping_timer;
-                    {_, false} -> StateData#state.ping_timer;
-                    {V, _} -> erlang:start_timer(V, self(), [])
+    PingTimer = case StateData#state.ping_interval of
+                    0 -> StateData#state.ping_timer;
+                    V -> erlang:start_timer(V, self(), [])
                 end,
      StateData#state{timer = Timer, ping_timer = PingTimer,
                      pong_expected = false}.
@@ -307,9 +316,9 @@ get_human_html_xmlel() ->
 parse(#state{rfc_compilant = C} = State, Data) ->
     case C of
         undefined ->
-            P = xml_stream:new(self()),
-            P2 = xml_stream:parse(P, Data),
-            xml_stream:close(P2),
+            P = fxml_stream:new(self()),
+            P2 = fxml_stream:parse(P, Data),
+            fxml_stream:close(P2),
             case parsed_items([]) of
                 error ->
                     {State#state{rfc_compilant = true}, <<"parse error">>};
@@ -321,7 +330,7 @@ parse(#state{rfc_compilant = C} = State, Data) ->
                     parse(State#state{rfc_compilant = false}, Data)
             end;
         true ->
-            El = xml_stream:parse_element(Data),
+            El = fxml_stream:parse_element(Data),
             case El of
                 #xmlel{name = <<"open">>, attrs = Attrs} ->
                     Attrs2 = [{<<"xmlns:stream">>, ?NS_STREAM}, {<<"xmlns">>, <<"jabber:client">>} |
@@ -351,3 +360,10 @@ parsed_items(List) ->
     after 0 ->
             lists:reverse(List)
     end.
+
+opt_type(websocket_ping_interval) ->
+    fun (I) when is_integer(I), I >= 0 -> I end;
+opt_type(websocket_timeout) ->
+    fun (I) when is_integer(I), I > 0 -> I end;
+opt_type(_) ->
+    [websocket_ping_interval, websocket_timeout].
